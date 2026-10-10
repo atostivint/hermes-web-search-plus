@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Brave queries are shortened only past Brave's documented limit of 600 characters and 75 words. 5.0.1 used 400 characters and 50 words and cut queries Brave would have accepted.
+
 ## [v5.0.1] — 2026-10-10
 
 ### Fixed
