@@ -87,7 +87,7 @@ class InProcessSearchTests(unittest.TestCase):
             result = search.run_search_request(query="anything", provider="serpbase", count=1)
 
         self.assertEqual(result["error_type"], "requested_provider_not_configured")
-        self.assertIn("setup.py setup", result["error"])
+        self.assertIn("hermes web-search-plus setup", result["error"])
         self.assertEqual(result["provider"], "serpbase")
         self.assertTrue(result["provider_errors"])
 

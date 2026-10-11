@@ -8,7 +8,6 @@ from __future__ import annotations
 __version__ = "5.0.1"
 
 import argparse
-import getpass
 import importlib
 import json
 import logging
@@ -44,8 +43,8 @@ from .wsp_core.provider_registry import (
     keyless_public_env_var,
     plugin_catalog,
 )
-from .wsp_core.credentials import get_secret, is_secret_scope_error, set_secret_resolver
-from .wsp_core.env_loader import clean_env_value as _shared_clean_env_value, get_hermes_env_path, is_truthy
+from .wsp_core.credentials import get_secret, get_secret_resolver, is_secret_scope_error, set_secret_resolver
+from .wsp_core.env_loader import clean_env_value as _shared_clean_env_value, is_truthy
 from .wsp_core.cache import MAX_STORED_TEXT_CHARS, store_web_text
 from .wsp_core.config import (
     ORDER_AUTO_WORDS,
@@ -89,28 +88,41 @@ def _get_provider_catalog() -> List[Dict[str, Any]]:
     return [dict(item) for item in _PROVIDER_CATALOG]
 
 
-def _read_env_file(path: Path) -> Dict[str, str]:
-    """Read simple KEY=VALUE entries from an env file without exposing secrets."""
-    values: Dict[str, str] = {}
-    if not path.exists():
-        return values
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        value = _clean_env_value(value)
-        if key.strip() and value:
-            values[key.strip()] = value
-    return values
+def _credential_env_names() -> List[str]:
+    """Every credential or per-profile setting name the engine reads through get_secret."""
+    names = {str(item["env"]) for item in _PROVIDER_CATALOG}
+    names.update(_PROVIDER_ENV_KEYS)
+    names.update(_EXTRACT_PROVIDER_ENV_KEYS)
+    names.update(keyless_public_env_var(spec.provider) for spec in PROVIDER_SPECS.values() if spec.keyless)
+    names.update({"DONSETCH_BIN", "SEARXNG_ALLOW_PRIVATE", jev_setup.JEV_ENV})
+    return sorted(names)
 
 
-def _effective_env(env_file: Mapping[str, str]) -> Dict[str, str]:
-    """The process environment, plus whatever an .env file adds. Process values win."""
-    env = dict(os.environ)
-    for key, value in env_file.items():
-        env.setdefault(key, value)
+def _credential_env() -> Dict[str, str]:
+    """What the running Hermes profile sees for every name WSP reads.
+
+    Values come from ``wsp_core.credentials.get_secret`` (Hermes' profile-scoped
+    resolver inside Hermes). Setup and status never read ``.env`` files.
+    Template placeholders and empty values are left out.
+    """
+    env: Dict[str, str] = {}
+    for name in _credential_env_names():
+        value = _clean_env_value(get_secret(name) or "")
+        if value:
+            env[name] = value
     return env
+
+
+def _ensure_hermes_secret_resolver() -> None:
+    """Install Hermes' profile-aware resolver for CLI code paths (idempotent).
+
+    ``hermes web-search-plus ...`` runs after Hermes has loaded the profile, so
+    ``agent.secret_scope.get_secret`` sees the same keys the tools do. A resolver
+    that register() already installed is kept. Outside Hermes the import fails and
+    reads fall back to the process environment.
+    """
+    if get_secret_resolver() is None:
+        _install_hermes_secret_resolver()
 
 
 def _provider_config_status(env: Optional[Mapping[str, str]] = None, config: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
@@ -120,7 +132,7 @@ def _provider_config_status(env: Optional[Mapping[str, str]] = None, config: Opt
     capability-based: one search provider enables web_search_plus; one
     extraction-capable provider enables web_extract_plus.
     """
-    env = env if env is not None else os.environ
+    env = env if env is not None else _credential_env()
     providers: Dict[str, Dict[str, Any]] = {}
     configured_count = 0
     configured_search_count = 0
@@ -130,7 +142,9 @@ def _provider_config_status(env: Optional[Mapping[str, str]] = None, config: Opt
         spec = PROVIDER_SPECS[str(item["provider"])]
         section = (config or {}).get(spec.config_section, {})
         section = section if isinstance(section, Mapping) else {}
-        configured = _clean_env_value(str(section.get("api_key") or section.get("apiKey") or env.get(key) or "")) is not None
+        configured = _clean_env_value(
+            str(section.get("api_key") or section.get("apiKey") or (section.get("binary") if spec.provider == "donsetch" else None) or env.get(key) or "")
+        ) is not None
         if spec.provider == "searxng":
             configured = _is_well_formed_http_url(section.get("base_url") or section.get("instance_url") or env.get(key))
         if spec.keyless:
@@ -162,11 +176,6 @@ def _provider_config_status(env: Optional[Mapping[str, str]] = None, config: Opt
             for diagnostic in PROVIDER_STARTUP_DIAGNOSTICS
         ],
     }
-
-
-def _get_hermes_env_path() -> Path:
-    """Return Hermes' profile-aware .env path when available."""
-    return get_hermes_env_path()
 
 
 
@@ -311,7 +320,7 @@ def _build_fastpath_report(config_path: Optional[Path] = None) -> Dict[str, Any]
     checks.append({
         "id": "standalone_setup_available",
         "ok": setup_script.exists(),
-        "detail": "setup.py works without unreleased Hermes core plugin-CLI support",
+        "detail": "setup.py scaffolds providers and runs config.json routing commands outside Hermes; status and setup run as `hermes web-search-plus`",
     })
 
     config_text = ""
@@ -735,7 +744,7 @@ def _routing_summary(config: Mapping[str, Any]) -> str:
         f"  auto-routing: {'on' if auto.get('enabled', True) else 'off'}",
         "  order: " + (
             "custom (search priority, every query)" if auto.get("order") == "custom"
-            else "automatic by query type (setup.py config set-order to choose your own)"
+            else "automatic by query type (`hermes web-search-plus config set-order` to choose your own)"
         ),
         f"  default provider: {config.get('default_provider') or 'none'}",
         f"  fallback provider: {auto.get('fallback_provider', 'serper')}",
@@ -832,7 +841,7 @@ def _donsetch_status(env: Mapping[str, str], config: Mapping[str, Any]) -> Dict[
 
 
 def _status_payload(env: Optional[Mapping[str, str]] = None, config: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
-    active_env = env if env is not None else os.environ
+    active_env = env if env is not None else _credential_env()
     active_config = dict(config or _default_behavior_config())
     return {
         "providers": _provider_config_status(active_env, active_config),
@@ -907,8 +916,9 @@ def _render_setup_guidance(env: Optional[Mapping[str, str]] = None, *, fancy: bo
         "web-search-plus is installed but no provider keys are configured.",
         "No single key is mandatory, but at least one search-capable provider is needed for web_search_plus.",
         "Add LINKUP_API_KEY or another extraction-capable provider for web_extract_plus.",
-        "Run `python3 ~/.hermes/plugins/web-search-plus/setup.py setup` for the recommended providers, or add `--preset all` to walk through every supported provider.",
-        "No key yet? `setup.py setup --keyless-public` starts with Keenable's free public tier.",
+        "Run `hermes web-search-plus setup` for the recommended providers (add `--preset all` for every supported provider).",
+        "Keys are stored by Hermes: `hermes config set BRAVE_API_KEY <key>`, or Settings > Plugins > Web Search Plus in Hermes Desktop.",
+        "No key yet? `hermes web-search-plus setup --keyless-public` starts with Keenable's free public tier.",
         "",
         "Recommended starter providers:",
     ]
@@ -970,7 +980,7 @@ def _render_status_dashboard(status: Optional[Dict[str, Any]] = None, *, color: 
         lines.append("│ Tip: add Linkup for clean web_extract_plus markdown.")
     elif not status["search_configured"]:
         lines.append("│ Starter: Brave + Serper + Exa + Linkup, the providers automatic routing tries first.")
-        lines.append("│ No key yet? `setup.py setup --keyless-public` starts with Keenable's free public tier.")
+        lines.append("│ No key yet? `hermes web-search-plus setup --keyless-public` starts with Keenable's free public tier.")
         lines.append("│ Local and keyless: DonSeTch (separate install, explicit calls only), see docs/DONSETCH.md.")
     if status["search_configured"]:
         missing = _missing_router_first_providers(status)
@@ -978,8 +988,8 @@ def _render_status_dashboard(status: Optional[Dict[str, Any]] = None, *, color: 
             lines.append("│ Routing falls back: " + "; ".join(missing))
     lines.extend([
         "╰─ Next commands",
-        "   python3 ~/.hermes/plugins/web-search-plus/setup.py setup",
-        "   python3 ~/.hermes/plugins/web-search-plus/setup.py list",
+        "   hermes web-search-plus setup",
+        "   hermes web-search-plus list",
     ])
     if status["search_configured"]:
         lines.extend([
@@ -1020,51 +1030,17 @@ def _providers_for_preset(preset: str) -> List[Dict[str, Any]]:
     return [item for item in _PROVIDER_CATALOG if item["provider"] in names]
 
 
-def _upsert_env_values(env_path: Path, values: Mapping[str, str]) -> Dict[str, List[str]]:
-    """Insert/update env values in a .env file. Caller owns secret prompting."""
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    existing_lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    keys = set(values)
-    seen = set()
-    added: List[str] = []
-    updated: List[str] = []
-    output: List[str] = []
-
-    for line in existing_lines:
-        if "=" not in line or line.lstrip().startswith("#"):
-            output.append(line)
-            continue
-        key, _, _old = line.partition("=")
-        clean_key = key.strip()
-        if clean_key in keys:
-            output.append(f"{clean_key}={values[clean_key]}")
-            updated.append(clean_key)
-            seen.add(clean_key)
-        else:
-            output.append(line)
-
-    for key, value in values.items():
-        if key not in seen:
-            output.append(f"{key}={value}")
-            added.append(key)
-
-    # The .env holds plaintext API keys: create it 0600 and re-tighten an
-    # existing file before writing so other local users cannot read secrets.
-    env_path.touch(mode=0o600, exist_ok=True)
-    try:
-        os.chmod(env_path, 0o600)
-    except OSError:
-        pass
-    env_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
-    return {"updated": updated, "added": added}
-
-
 def _unconfigured_session_hint(
     env: Optional[Mapping[str, str]] = None,
     state_path: Optional[Path] = None,
 ) -> Optional[Dict[str, str]]:
     """Return a one-shot unconfigured hint payload, recording acknowledgement in state."""
-    if _provider_config_status(env)["configured"]:
+    try:
+        if _provider_config_status(env)["configured"]:
+            return None
+    except Exception as exc:
+        # A hook must never break the session; an unreadable profile gets no hint.
+        logger.debug("web-search-plus onboarding hint skipped: %s", exc)
         return None
     state_path = state_path or _setup_state_path()
     try:
@@ -1078,14 +1054,43 @@ def _unconfigured_session_hint(
         logger.debug("web-search-plus onboarding state write failed: %s", exc)
     return {
         "action": "hint",
-        "message": "web-search-plus loaded but no provider keys are configured. Run `python ~/.hermes/plugins/web-search-plus/setup.py setup`.",
+        "message": "web-search-plus loaded but no provider keys are configured. Run `hermes web-search-plus setup`.",
     }
 
 
+def _hermes_set_command(item: Mapping[str, Any]) -> str:
+    """The Hermes command that stores this provider's value. The value stays a placeholder."""
+    placeholder = {"searxng": "<url>", "donsetch": "</path/to/donsetch>"}.get(str(item["provider"]), "<key>")
+    return f"hermes config set {item['env']} {placeholder}"
+
+
+def _print_key_instructions(commands: List[str]) -> None:
+    """Say how keys get stored. Keys go through Hermes; this plugin never reads or writes .env files."""
+    if not commands:
+        return
+    print("\nStore keys through Hermes (web-search-plus never writes .env files or asks for keys):")
+    for command in commands:
+        print(f"  {command}")
+    print(
+        "  Or use Hermes Desktop: Settings > Plugins > Web Search Plus (masked key fields).\n"
+        "  The command form puts the key on the command line, so your shell history keeps it; "
+        "Desktop avoids that. Then run /reset in Hermes so the tools see the key."
+    )
+
+
+def _note_ignored_env_path(args: Any) -> None:
+    """--env-path and --show-values predate Hermes-managed keys; say they no longer do anything."""
+    if getattr(args, "env_path", None) or getattr(args, "show_values", False):
+        print(
+            "Note: --env-path and --show-values are ignored since 5.1; keys are read and stored through Hermes, not .env files.",
+            file=sys.stderr,
+        )
+
+
 def _web_search_plus_cli_setup(parser: argparse.ArgumentParser) -> None:
-    parser.description = "Configure web-search-plus provider keys with a tiny, secret-safe wizard."
+    parser.description = "Show web-search-plus provider status and routing, and guide key setup. Keys are stored by Hermes, never by this plugin."
     parser.epilog = (
-        "Default setup prompts the starter providers. Presets: starter=Brave+Serper+Exa+Linkup, "
+        "Default setup covers the starter providers. Presets: starter=Brave+Serper+Exa+Linkup, "
         "lean=Brave+Linkup, search=Brave+Serper+Exa+Tavily+Firecrawl+Linkup, "
         "extract=Linkup+Firecrawl+Tavily, self-hosted=SearXNG+keyless Keenable, all=every provider."
     )
@@ -1093,16 +1098,16 @@ def _web_search_plus_cli_setup(parser: argparse.ArgumentParser) -> None:
     status = subs.add_parser("status", help="Show a setup dashboard without printing secrets")
     status.add_argument("--plain", action="store_true", help="Print compact legacy text instead of the dashboard")
     status.add_argument("--json", action="store_true", help="Print status as JSON")
-    status.add_argument("--env-path", help="Override Hermes .env path for status checks")
+    status.add_argument("--env-path", help=argparse.SUPPRESS)  # ignored since 5.1: status reads keys through Hermes
     status.add_argument("--config-path", help="Override web-search-plus config.json path")
 
-    setup = subs.add_parser("setup", help="Run the provider-key setup wizard")
+    setup = subs.add_parser("setup", help="Show which provider keys are missing and how to store them through Hermes")
     setup.add_argument("providers", nargs="*", help="Provider names to configure (overrides --preset)")
     setup.add_argument("--preset", default="starter", help="starter, lean, search, extract, self-hosted, or all (default: starter)")
     setup.add_argument("--open", action="store_true", help="Open signup URLs in a browser before prompting")
-    setup.add_argument("--env-path", help="Override Hermes .env path")
+    setup.add_argument("--env-path", help=argparse.SUPPRESS)  # ignored since 5.1: setup never touches .env files
     setup.add_argument("--config-path", help="Override web-search-plus config.json path")
-    setup.add_argument("--show-values", action="store_true", help="Use visible input instead of hidden secret prompts")
+    setup.add_argument("--show-values", action="store_true", help=argparse.SUPPRESS)  # ignored since 5.1: setup no longer asks for keys
     setup.add_argument("--keyless-public", action="store_true", help="Opt into the keyless public tier (no API key) for any keyless provider, skipping its confirmation prompt")
     setup.add_argument("--dry-run", action="store_true", help="Show the setup/routing plan without writing files")
     setup.add_argument("--routing", choices=["auto", "fixed"], help="Persist routing mode after key setup")
@@ -1122,7 +1127,7 @@ def _web_search_plus_cli_setup(parser: argparse.ArgumentParser) -> None:
     )
     setup.add_argument(
         "--jev-key-file",
-        help="Path to TYPESAFE_API_KEY_FILE. The key value is never written to config.json",
+        help=argparse.SUPPRESS,  # ignored since 5.1: the runtime no longer reads key files
     )
 
     list_cmd = subs.add_parser("list", help="List supported providers, capabilities, and signup URLs")
@@ -1307,6 +1312,7 @@ def _handle_config_command(args: Any) -> None:
 
 
 def _web_search_plus_cli_command(args: Any) -> None:
+    _ensure_hermes_secret_resolver()
     command = getattr(args, "web_search_plus_command", None) or "status"
     if command == "list":
         print(_render_provider_catalog(json_output=getattr(args, "json", False)))
@@ -1340,12 +1346,10 @@ def _web_search_plus_cli_command(args: Any) -> None:
         return
 
     if command == "status":
-        env_path = getattr(args, "env_path", None)
+        _note_ignored_env_path(args)
         config_path = getattr(args, "config_path", None)
-        if env_path:
-            env = _read_env_file(Path(env_path))
-        else:
-            env = _effective_env(_read_env_file(_get_hermes_env_path()))
+        # What the running Hermes profile sees, resolved through Hermes; no .env reads.
+        env = _credential_env()
         path = Path(config_path) if config_path else _get_plugin_config_path()
         # Status shows what searches use: config.json plus the Hermes Desktop
         # settings, which the engine lays over it at load time. Never written back.
@@ -1377,26 +1381,30 @@ def _web_search_plus_cli_command(args: Any) -> None:
         return
 
     if command == "setup":
+        _note_ignored_env_path(args)
         selected = set(getattr(args, "providers", None) or [])
         selected = {_normalize_provider_name(p) for p in selected} if selected else set()
         catalog = [item for item in _PROVIDER_CATALOG if item["provider"] in selected] if selected else _providers_for_preset(getattr(args, "preset", "starter"))
         if not catalog:
-            raise SystemExit("No matching providers. Run `python ~/.hermes/plugins/web-search-plus/setup.py list`.")
+            raise SystemExit("No matching providers. Run `hermes web-search-plus list`.")
 
-        env_path = Path(getattr(args, "env_path", None) or _get_hermes_env_path())
+        env_now = _credential_env()
         config_path = Path(getattr(args, "config_path", None) or _get_plugin_config_path())
         config = _apply_setup_routing_args(_load_behavior_config(config_path), args)
         profile_preset = str(getattr(args, "preset", "") or "").lower().strip().replace("_", "-") == "self-hosted"
-        print(_render_status_dashboard(_provider_config_status(_read_env_file(env_path), config)))
+        print(_render_status_dashboard(_provider_config_status(env_now, config)))
         print("\nSetup plan:")
+        key_commands: List[str] = []
         for item in catalog:
             rec = " recommended" if item.get("recommended") else ""
             caps = ", ".join(item.get("capabilities", []))
             keyless = " — keyless public tier available (no key needed)" if item["provider"] in _KEYLESS_PROVIDER_IDS else ""
-            print(f"  • {item['display_name']} ({item['provider']}) — {item['env']} — {caps}{rec}{keyless}")
+            have = bool(env_now.get(item["env"]))
+            print(f"  • {item['display_name']} ({item['provider']}) — {item['env']} [{'set' if have else 'not set'}] — {caps}{rec}{keyless}")
             print(f"    {item['signup_url']}")
-        print(f"\nTarget env file: {env_path}")
-        print(f"Target config file: {config_path}")
+            if not have:
+                key_commands.append(_hermes_set_command(item))
+        print(f"\nRouting config file: {config_path}")
         print(_routing_summary(config))
         if getattr(args, "jev", False):
             want_jev = True
@@ -1408,7 +1416,6 @@ def _web_search_plus_cli_command(args: Any) -> None:
             jev_decisions = jev_setup.parse_decisions(getattr(args, "jev_decisions", None))
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        env_now = _read_env_file(env_path)
         print(
             "\n".join(
                 jev_setup.plan_lines(
@@ -1419,25 +1426,18 @@ def _web_search_plus_cli_command(args: Any) -> None:
             )
         )
         if getattr(args, "dry_run", False):
-            print("Dry run only; no keys or routing config written.")
+            _print_key_instructions(key_commands)
+            print("Dry run only; no routing config written.")
             return
 
+        if getattr(args, "open", False):
+            for item in catalog:
+                if not env_now.get(item["env"]):
+                    webbrowser.open(item["signup_url"])
         force_keyless = getattr(args, "keyless_public", False) or profile_preset
-        values: Dict[str, str] = {}
         keyless_enable: List[str] = []
         for item in catalog:
-            if getattr(args, "open", False):
-                webbrowser.open(item["signup_url"])
-            prompt = f"{item['display_name']} key ({item['env']}, Enter to skip): "
-            try:
-                if getattr(args, "show_values", False):
-                    value = input(prompt).strip()
-                else:
-                    value = getpass.getpass(prompt).strip()
-            except EOFError:
-                value = ""
-            if value:
-                values[item["env"]] = value
+            if env_now.get(item["env"]):
                 continue
             if item["provider"] not in _KEYLESS_PROVIDER_IDS or _keyless_public_opted_in(item["provider"], config_path):
                 continue
@@ -1453,22 +1453,17 @@ def _web_search_plus_cli_command(args: Any) -> None:
         # Nothing searchable after the prompts: offer the keyless Keenable tier so
         # the tools work right away. Keys added later take over automatically.
         # Keyless use is an explicit opt-in: asked only at a terminal, default no.
-        search_keys = {
-            item["env"] for item in _PROVIDER_CATALOG
-            if PROVIDER_SPECS[item["provider"]].supports_search
-        }
         if (
-            not (set(values) & search_keys)
-            and "keenable" not in keyless_enable
+            "keenable" not in keyless_enable
             and not _keyless_public_opted_in("keenable", config_path)
-            and not _provider_config_status(_effective_env(env_now), config)["search_configured"]
+            and not _provider_config_status(env_now, config)["search_configured"]
         ):
             if force_keyless:
                 answer = "y"
             elif not sys.stdin.isatty():
                 answer = "n"
                 print(
-                    "\nNo search key yet. `setup.py setup --keyless-public` starts with Keenable's public tier "
+                    "\nNo search key yet. `hermes web-search-plus setup --keyless-public` starts with Keenable's public tier "
                     "(no key; queries and fetched URLs go to its unauthenticated public service)."
                 )
             else:
@@ -1490,7 +1485,7 @@ def _web_search_plus_cli_command(args: Any) -> None:
         # Two or more search providers: let the user keep automatic routing or
         # fix their own order. Asked only when there is a choice to make.
         custom_order_set = False
-        searxng_value = str(values.get("SEARXNG_INSTANCE_URL") or "")
+        searxng_value = str(env_now.get("SEARXNG_INSTANCE_URL") or "")
         if searxng_value and not env_now.get("SEARXNG_ALLOW_PRIVATE"):
             from urllib.parse import urlparse as _urlparse
             import ipaddress as _ip
@@ -1502,12 +1497,12 @@ def _web_search_plus_cli_command(args: Any) -> None:
             if private:
                 print(
                     "\nNote: your SearXNG URL points to a local/private address. WSP blocks those "
-                    "by default; add SEARXNG_ALLOW_PRIVATE=1 to your .env if this is your own instance."
+                    "by default; run `hermes config set SEARXNG_ALLOW_PRIVATE 1` if this is your own instance."
                 )
         keyed_search = [
             item["provider"] for item in _PROVIDER_CATALOG
             if PROVIDER_SPECS[item["provider"]].supports_search
-            and (item["env"] in values or env_now.get(item["env"]))
+            and env_now.get(item["env"])
         ]
         if len(keyed_search) >= 2 and not force_keyless:
             try:
@@ -1544,35 +1539,15 @@ def _web_search_plus_cli_command(args: Any) -> None:
             else:
                 want_jev = False
         if want_jev:
-            key_file = getattr(args, "jev_key_file", None)
-            merged_env = dict(env_now)
-            merged_env.update(values)
-            if key_file:
-                path = Path(str(key_file)).expanduser()
-                try:
-                    present = bool(path.read_text(encoding="utf-8").strip())
-                except OSError:
-                    present = False
-                if not present:
-                    print("Jev not enabled: --jev-key-file is missing or empty.")
-                    want_jev = False
-                else:
-                    values[jev_setup.JEV_ENV_FILE] = str(path)
-            elif not jev_setup.key_present(merged_env, config):
-                prompt = f"TypeSafe / Jev key ({jev_setup.JEV_ENV}, Enter to skip): "
-                try:
-                    if getattr(args, "show_values", False):
-                        secret = input(prompt).strip()
-                    else:
-                        secret = getpass.getpass(prompt).strip()
-                except (EOFError, OSError):
-                    secret = ""
-                if secret:
-                    stored = jev_setup.persist_key_file(secret)
-                    values[jev_setup.JEV_ENV_FILE] = str(stored)
-                else:
-                    print("Jev not enabled: no TypeSafe key provided.")
-                    want_jev = False
+            if getattr(args, "jev_key_file", None):
+                print(
+                    "Note: --jev-key-file is ignored since 5.1; key files are no longer read. "
+                    f"Store the key with `hermes config set {jev_setup.JEV_ENV} <key>`.",
+                    file=sys.stderr,
+                )
+            if not jev_setup.key_present(env_now, config):
+                key_commands.append(f"hermes config set {jev_setup.JEV_ENV} <key>")
+                print("Jev is enabled in config.json but stays idle until its TypeSafe key is stored through Hermes.")
         if want_jev:
             jev_setup.apply_jev_config(config, enabled=True, decisions=jev_decisions)
             jev_wrote = True
@@ -1582,12 +1557,6 @@ def _web_search_plus_cli_command(args: Any) -> None:
         )
         routing_args_present = routing_args_present or profile_preset
         wrote_any = False
-        if values:
-            result = _upsert_env_values(env_path, values)
-            changed = sorted(result["updated"] + result["added"])
-            print(f"\n✓ Configured {len(changed)} provider key(s) in {env_path}: " + ", ".join(changed))
-            print("✓ Secrets were not printed.")
-            wrote_any = True
         if routing_args_present or keyless_enable or jev_wrote or custom_order_set:
             _write_behavior_config(config_path, config)
             if custom_order_set:
@@ -1604,10 +1573,11 @@ def _web_search_plus_cli_command(args: Any) -> None:
                     f"(decisions: {', '.join(jev_decisions)})."
                 )
             wrote_any = True
+        _print_key_instructions(key_commands)
         if not wrote_any:
-            print("No keys entered; nothing changed.")
+            print("Nothing changed in the routing config.")
             return
-        print("Next: restart Hermes or run /reset so tools re-register with the new credentials/preferences.")
+        print("Next: restart Hermes or run /reset so tools re-register with the new preferences.")
         return
 
     raise SystemExit(f"Unknown web-search-plus command: {command}")
@@ -2467,6 +2437,17 @@ def register(ctx: Any) -> None:
             description="Show Web Search Plus provider setup status and starter-key guidance.",
             args_hint="",
         )
+
+    if hasattr(ctx, "register_cli_command"):
+        try:
+            ctx.register_cli_command(
+                name="web-search-plus",
+                help="Web Search Plus: provider status, key setup guidance and routing config",
+                setup_fn=_web_search_plus_cli_setup,
+                handler_fn=_web_search_plus_cli_command,
+            )
+        except Exception:  # pragma: no cover - never break Plus registration
+            logger.warning("web-search-plus: CLI command registration skipped")
 
     if hasattr(ctx, "register_hook"):
         ctx.register_hook("on_session_start", _on_session_start)

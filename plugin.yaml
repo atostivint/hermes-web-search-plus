@@ -17,6 +17,7 @@ optional_env:
   - SEARXNG_INSTANCE_URL
   - KEENABLE_API_KEY
   - DONSETCH_BIN
+  - TYPESAFE_API_KEY
   - MONID_API_KEY
   - TINYFISH_API_KEY
 provides_tools:
@@ -27,21 +28,21 @@ provides_web_providers:
 provides_hooks:
   - on_session_start
 onboarding:
-  setup_command: "python ~/.hermes/plugins/web-search-plus/setup.py setup"
-  status_command: "python ~/.hermes/plugins/web-search-plus/setup.py status"
-  fastpath_status_command: "python ~/.hermes/plugins/web-search-plus/setup.py fastpath"
-  routing_status_command: "python ~/.hermes/plugins/web-search-plus/setup.py config show"
+  setup_command: "hermes web-search-plus setup"
+  status_command: "hermes web-search-plus status"
+  fastpath_status_command: "hermes web-search-plus fastpath"
+  routing_status_command: "hermes web-search-plus config show"
   routing_config_commands:
-    fixed_provider: "python ~/.hermes/plugins/web-search-plus/setup.py config set-default you"
-    auto_routing: "python ~/.hermes/plugins/web-search-plus/setup.py config set-routing on"
-    priority: "python ~/.hermes/plugins/web-search-plus/setup.py config set-priority you,serper,exa,firecrawl,tavily,linkup,parallel"
-    fallback: "python ~/.hermes/plugins/web-search-plus/setup.py config set-fallback serper"
-    disable_provider: "python ~/.hermes/plugins/web-search-plus/setup.py config disable brave"
-    block_auto_provider: "python ~/.hermes/plugins/web-search-plus/setup.py config set-auto-allow brave off"
-    reset: "python ~/.hermes/plugins/web-search-plus/setup.py config reset --yes"
+    fixed_provider: "hermes web-search-plus config set-default you"
+    auto_routing: "hermes web-search-plus config set-routing on"
+    priority: "hermes web-search-plus config set-priority you,serper,exa,firecrawl,tavily,linkup,parallel"
+    fallback: "hermes web-search-plus config set-fallback serper"
+    disable_provider: "hermes web-search-plus config disable brave"
+    block_auto_provider: "hermes web-search-plus config set-auto-allow brave off"
+    reset: "hermes web-search-plus config reset --yes"
   config_file: "~/.hermes/plugins/config.json"
   env_override: "WEB_SEARCH_PLUS_CONFIG"
-  note: "No single provider key is globally required. Add at least one search-capable provider for web_search_plus; add Linkup or another extraction-capable provider for web_extract_plus. Setup keys live in .env; routing preferences live in config.json and can choose fixed-provider mode or tuned auto-routing without relying on unreleased Hermes core plugin-CLI support. Use setup.py fastpath to inspect advisory Hermes config hints for lower-latency direct tool routing."
+  note: "No single provider key is globally required. Add at least one search-capable provider for web_search_plus; add Linkup or another extraction-capable provider for web_extract_plus. Keys are stored by Hermes, never by this plugin: run `hermes config set BRAVE_API_KEY <key>` or use Settings > Plugins > Web Search Plus in Hermes Desktop. `hermes web-search-plus status` shows which keys the active profile sees. Routing preferences live in plugins/config.json and can choose fixed-provider mode or tuned auto-routing. Use `hermes web-search-plus fastpath` to inspect advisory Hermes config hints for lower-latency direct tool routing."
   recommended_env:
     - name: BRAVE_API_KEY
       description: "Brave Search — first choice for most automatic searches"
@@ -79,3 +80,5 @@ config_schema:
   keenable_api_key: {type: secret, env: KEENABLE_API_KEY, description: "Keenable API key"}
   monid_api_key: {type: secret, env: MONID_API_KEY, description: "Monid API key (explicit-only; enable in config.json)"}
   tinyfish_api_key: {type: secret, env: TINYFISH_API_KEY, description: "TinyFish API key (explicit-only; enable in config.json)"}
+  typesafe_api_key: {type: secret, env: TYPESAFE_API_KEY, description: "TypeSafe key for the optional Jev overlay (off unless enabled in config.json)"}
+  donsetch_bin: {type: str, label: "DonSeTch binary", description: "Path to the DonSeTch binary (a file path, not a secret). Empty leaves config.json unchanged."}
