@@ -98,10 +98,18 @@ class WSPNativeBackend(WebSearchProvider):
                         continue
                     if engine.provider_configured(provider, config):
                         return True
-        except Exception:
+        except Exception as exc:
+            # A refused credential read (Hermes multiplexing without a profile
+            # scope) is Hermes' to report, not "unavailable".
+            if self._is_secret_scope_error(exc):
+                raise
             # Offline config inspection only; never probe vendor I/O here.
             return False
         return False
+
+    def _is_secret_scope_error(self, exc: BaseException) -> bool:
+        check = getattr(self.plugin, "is_secret_scope_error", None)
+        return bool(callable(check) and check(exc))
 
     def supports_search(self) -> bool:
         return self._selected("search")
@@ -168,7 +176,7 @@ class WSPNativeBackend(WebSearchProvider):
         if data.get("error"):
             return {
                 "success": False,
-                "error": "WSP native search failed; check provider readiness and configuration",
+                "error": self._failure_message(data, "WSP native search failed; check provider readiness and configuration"),
                 "data": {"web": []},
             }
 
@@ -208,6 +216,13 @@ class WSPNativeBackend(WebSearchProvider):
             },
         }
 
+    def _failure_message(self, data: Dict[str, Any], generic: str) -> str:
+        """Generic text, except a Hermes credential-scope error, which says what to do."""
+        scope_type = getattr(self.plugin, "_SECRET_SCOPE_ERROR_TYPE", None)
+        if scope_type and data.get("error_type") == scope_type:
+            return str(data.get("error") or generic)
+        return generic
+
     # -- extract ------------------------------------------------------------
 
     def extract(self, urls: List[str], **kwargs: Any) -> List[Dict[str, Any]]:
@@ -240,7 +255,8 @@ class WSPNativeBackend(WebSearchProvider):
             ]
 
         if data.get("error") and not data.get("results"):
-            return [{"url": url, "error": "WSP native extraction failed; check provider readiness and configuration"} for url in url_list]
+            message = self._failure_message(data, "WSP native extraction failed; check provider readiness and configuration")
+            return [{"url": url, "error": message} for url in url_list]
 
         results = data.get("results")
         if not isinstance(results, list):

@@ -7,11 +7,11 @@ falls back to unchanged WSP behaviour.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from .credentials import get_secret
 
 PINNED_MODEL = "jev-1.13.0"
 DEFAULT_MIN_CONFIDENCE = 0.85
@@ -104,16 +104,12 @@ def settings_from_config(config: Optional[Dict[str, Any]]) -> JevSettings:
 
 
 def _key() -> str:
-    env = os.environ.get("TYPESAFE_API_KEY", "").strip()
-    if env:
-        return env
-    path = os.environ.get("TYPESAFE_API_KEY_FILE", "").strip()
-    if path:
-        try:
-            return Path(path).expanduser().read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-    return ""
+    """TYPESAFE_API_KEY from the active profile (or process env without a host resolver).
+
+    Key files (TYPESAFE_API_KEY_FILE) are not read: the engine never opens
+    credential files itself (Hermes plugin catalog rule 11).
+    """
+    return (get_secret("TYPESAFE_API_KEY") or "").strip()
 
 
 @dataclass

@@ -2,10 +2,12 @@ from wsp_core import extract
 import os
 import shutil
 import socket
+import sys
 
 import pytest
 
 from wsp_core import cache
+from wsp_core import credentials
 from wsp_core import provider_stats
 from wsp_core import search
 from wsp_core.config import keyless_public_env_var
@@ -48,12 +50,16 @@ def _isolate_runtime_state(tmp_path, monkeypatch):
 def _no_operator_credentials(monkeypatch):
     """Never let a test see the developer's real provider credentials.
 
-    wsp_core loads .env files (plugin directory, its parent, the Hermes profile)
-    into os.environ when it is imported. Routing depends on which providers are
-    configured, so real keys changed routing decisions and sent a research
-    fan-out to a provider the test had not mocked. A test that needs a key sets
-    a dummy one itself.
+    Without a host resolver wsp_core reads credentials from os.environ, so keys
+    exported in the developer's shell would be seen. Routing depends on which
+    providers are configured, so real keys changed routing decisions and sent
+    a research fan-out to a provider the test had not mocked. A test that needs
+    a key sets a dummy one itself. A resolver a test installs (as register()
+    does under Hermes) is removed again afterwards.
     """
+    for name, module in list(sys.modules.items()):
+        if module is credentials or name.endswith(".wsp_core.credentials"):
+            monkeypatch.setattr(module, "_resolver", None)
     for spec in PROVIDER_SPECS.values():
         monkeypatch.delenv(spec.env_var, raising=False)
         if spec.keyless:

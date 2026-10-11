@@ -96,7 +96,7 @@ from .search_locale import (
     provider_supports_locale,
     resolve_locale,
 )
-from .env_loader import load_env_files
+from .credentials import is_secret_scope_error
 from .research import run_research_mode
 from .attempt_engine_v3 import AttemptEngine, provider_attempt_context, request_deadline
 from .cache_v3 import ResponseCacheV3
@@ -120,11 +120,6 @@ from .routing import (
     explain_routing,
 )
 from .extract import extract_plus
-
-
-def _load_env_file():
-    """Load plugin-local, legacy parent, and Hermes profile .env files."""
-    load_env_files(__file__)
 
 
 EXTRACT_PROVIDER_PRIORITY = _extract.EXTRACT_PROVIDER_PRIORITY
@@ -2101,7 +2096,9 @@ def _race_providers(engine, candidates, contexts, operation_for, hedge_delay, de
             continue
         try:
             execution = tasks[provider][0].result(timeout=0)
-        except Exception:  # pragma: no cover - engine.execute converts provider errors
+        except Exception as exc:  # pragma: no cover - engine.execute converts provider errors
+            if is_secret_scope_error(exc):
+                raise
             execution = None
         finished[provider] = execution
         payload = execution.payload if execution is not None else None

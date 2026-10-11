@@ -39,6 +39,30 @@ def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
     profile's value in ``os.environ``.
     """
     if _resolver is not None:
-        return _resolver(name, default)
+        try:
+            return _resolver(name, default)
+        except Exception as exc:
+            _mark_secret_scope_error(exc)
+            raise
     value = os.environ.get(name)
     return value if value is not None else default
+
+
+_SCOPE_ERROR_MARK = "_wsp_secret_scope_error"
+
+
+def _mark_secret_scope_error(exc: BaseException) -> None:
+    try:
+        setattr(exc, _SCOPE_ERROR_MARK, True)
+    except Exception:  # pragma: no cover - exotic exception types without __dict__
+        pass
+
+
+def is_secret_scope_error(exc: BaseException) -> bool:
+    """Whether ``exc`` came from the host resolver refusing or failing a read.
+
+    Engine code that turns exceptions into "provider unavailable" must re-raise
+    these, so a scoping error reaches the tool output instead of reading as
+    "no keys configured".
+    """
+    return bool(getattr(exc, _SCOPE_ERROR_MARK, False))
