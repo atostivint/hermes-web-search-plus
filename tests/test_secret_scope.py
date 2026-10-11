@@ -310,6 +310,9 @@ def test_native_backend_reports_a_refused_read(monkeypatch, hermes):
     monkeypatch.setitem(sys.modules, "tools.web_tools", web_tools)
     import importlib
 
+    # register() in an earlier test may have imported the backend against a real
+    # Hermes (its venv has agent/ and tools/); import it fresh against the stand-ins.
+    monkeypatch.delitem(sys.modules, f"{plugin.__name__}.native_backend", raising=False)
     native = importlib.import_module(".native_backend", plugin.__name__)
     _register()
     backend = native.WSPNativeBackend(plugin)

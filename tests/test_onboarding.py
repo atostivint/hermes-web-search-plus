@@ -347,7 +347,9 @@ def test_cli_handler_without_hermes_falls_back_to_the_process_environment(monkey
 
     from wsp_core import credentials
 
+    # Both entries: a Hermes venv may already hold the real agent.secret_scope.
     monkeypatch.setitem(sys.modules, "agent", None)  # import raises ImportError
+    monkeypatch.setitem(sys.modules, "agent.secret_scope", None)
     monkeypatch.setattr(credentials, "_resolver", None)
 
     wsp._ensure_hermes_secret_resolver()
