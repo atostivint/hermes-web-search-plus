@@ -252,7 +252,7 @@ class KeenableExtractTests(unittest.TestCase):
 
         self.assertEqual(result["provider"], "keenable")
         self.assertEqual(result["error_type"], "requested_provider_not_configured")
-        self.assertIn("setup.py setup", result["error"])
+        self.assertIn("hermes web-search-plus setup", result["error"])
         self.assertEqual(search.provider_in_cooldown("keenable"), (False, 0))
 
 

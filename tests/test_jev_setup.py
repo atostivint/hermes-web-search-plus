@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from wsp_core.jev_setup import JEV_DECISIONS, apply_jev_config, parse_decisions, persist_key_file, status_payload
+from wsp_core.jev_setup import JEV_DECISIONS, apply_jev_config, parse_decisions, status_payload
 
 from plugin_loader import load_plugin
 PLUGIN_PATH = Path(__file__).resolve().parents[1] / "__init__.py"
@@ -35,46 +35,43 @@ def test_status_payload_never_includes_secret(tmp_path, monkeypatch):
     assert payload["enabled"] is True
 
 
-def test_status_payload_reads_key_file_without_leaking(tmp_path):
+def test_status_payload_ignores_key_files(tmp_path):
+    # Rule 11: the plugin reads no credential files; only TYPESAFE_API_KEY via Hermes counts.
     secret = tmp_path / "typesafe_api_key"
     secret.write_text("file-secret-value\n", encoding="utf-8")
     env = {"TYPESAFE_API_KEY_FILE": str(secret)}
-    payload = status_payload(env, {})
-    assert payload["key_present"] is True
-    assert payload["key_source"] == "file"
+    payload = status_payload(env, {"jev": {"enabled": True, "api_key_file": str(secret)}})
+    assert payload["key_present"] is False
+    assert payload["key_source"] is None
     assert "file-secret-value" not in json.dumps(payload)
 
 
 def test_apply_jev_config_strips_api_key_field():
     config = apply_jev_config(
-        {"jev": {"api_key": "nope"}},
+        {"jev": {"api_key": "nope", "api_key_file": "/old/key"}},
         enabled=True,
         decisions=("search_type",),
     )
     assert "api_key" not in config["jev"]
+    assert "api_key_file" not in config["jev"]
     assert config["jev"]["enabled"] is True
     assert config["jev"]["search_type"] is True
     assert config["jev"]["extract_quality"] is False
     assert config["jev"]["language_fill"] is False
 
 
-def test_persist_key_file_is_mode_600(tmp_path):
-    dest = tmp_path / "typesafe_api_key"
-    path = persist_key_file("file-secret-value", dest)
-    assert path == dest
-    assert oct(path.stat().st_mode & 0o777) == "0o600"
-    assert path.read_text(encoding="utf-8").strip() == "file-secret-value"
+def test_jev_setup_has_no_credential_file_writer():
+    # Keys are stored by Hermes (`hermes config set TYPESAFE_API_KEY ...`), never by this plugin.
+    from wsp_core import jev_setup
+
+    assert not hasattr(jev_setup, "persist_key_file")
 
 
 def test_setup_dry_run_mentions_optional_jev(monkeypatch, capsys):
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     args = parser.parse_args(["setup", "--preset", "lean", "--dry-run"])
-    monkeypatch.setattr(
-        wsp.getpass,
-        "getpass",
-        lambda _prompt: (_ for _ in ()).throw(AssertionError("should not prompt")),
-    )
+    monkeypatch.setattr("builtins.input", lambda _prompt="": (_ for _ in ()).throw(AssertionError("should not prompt")))
     args.func(args)
     out = capsys.readouterr().out
     assert "Optional Jev" in out
@@ -88,11 +85,7 @@ def test_setup_jev_dry_run_shows_enable_plan(monkeypatch, capsys):
     args = parser.parse_args(
         ["setup", "--preset", "lean", "--dry-run", "--jev", "--jev-key-file", "/tmp/does-not-need-to-exist"]
     )
-    monkeypatch.setattr(
-        wsp.getpass,
-        "getpass",
-        lambda _prompt: (_ for _ in ()).throw(AssertionError("should not prompt")),
-    )
+    monkeypatch.setattr("builtins.input", lambda _prompt="": (_ for _ in ()).throw(AssertionError("should not prompt")))
     args.func(args)
     out = capsys.readouterr().out
     assert "Plan: enable Jev" in out
@@ -102,8 +95,6 @@ def test_setup_jev_dry_run_shows_enable_plan(monkeypatch, capsys):
 
 def test_status_reports_jev_enabled_after_config_reload(tmp_path, capsys):
     config_path = tmp_path / "config.json"
-    env_path = tmp_path / ".env"
-    env_path.write_text("", encoding="utf-8")
     written = apply_jev_config(
         wsp._default_behavior_config(),
         enabled=True,
@@ -124,7 +115,7 @@ def test_status_reports_jev_enabled_after_config_reload(tmp_path, capsys):
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     args = parser.parse_args(
-        ["status", "--plain", "--config-path", str(config_path), "--env-path", str(env_path)]
+        ["status", "--plain", "--config-path", str(config_path)]
     )
     args.func(args)
     out = capsys.readouterr().out
@@ -148,11 +139,18 @@ def test_setup_no_jev_dry_run_stays_disabled(monkeypatch, capsys):
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     args = parser.parse_args(["setup", "--preset", "lean", "--dry-run", "--no-jev"])
-    monkeypatch.setattr(
-        wsp.getpass,
-        "getpass",
-        lambda _prompt: (_ for _ in ()).throw(AssertionError("should not prompt")),
-    )
+    monkeypatch.setattr("builtins.input", lambda _prompt="": (_ for _ in ()).throw(AssertionError("should not prompt")))
     args.func(args)
     out = capsys.readouterr().out
     assert "leave Jev disabled" in out
+
+
+def test_old_api_key_file_config_still_loads_without_crashing(tmp_path, monkeypatch):
+    from wsp_core.config import load_config
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"version": 1, "jev": {"enabled": True, "api_key_file": "/old/key"}}))
+    monkeypatch.setenv("WEB_SEARCH_PLUS_CONFIG", str(config_path))
+
+    assert load_config()["jev"]["enabled"] is True
+    assert not list(tmp_path.glob("config.json.broken-*"))

@@ -573,7 +573,7 @@ def _validate_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(jev, dict):
         raise ValueError("jev must be an object")
     if "api_key" in jev and str(jev.get("api_key") or "").strip():
-        raise ValueError("jev.api_key is not allowed; use TYPESAFE_API_KEY_FILE")
+        raise ValueError("jev.api_key is not allowed; store the key with `hermes config set TYPESAFE_API_KEY <key>`")
     for flag in ("enabled", "search_type", "extract_quality", "language_fill"):
         if not isinstance(jev.get(flag, False), bool):
             raise ValueError(f"jev.{flag} must be a boolean")
@@ -632,7 +632,7 @@ def _quarantine_runtime_config(config_path: Path, reason: str) -> None:
         }), file=sys.stderr)
 
 
-_DESKTOP_SETTING_KEYS = ("country", "language", "max_results", "auto_routing", "provider_order", "searxng_url")
+_DESKTOP_SETTING_KEYS = ("country", "language", "max_results", "auto_routing", "provider_order", "searxng_url", "donsetch_bin")
 
 
 def _coerce_yamlish_scalar(raw: str) -> Any:
@@ -948,6 +948,14 @@ def _apply_desktop_settings(config: Dict[str, Any], settings: Dict[str, Any]) ->
                 searxng = {}
                 config["searxng"] = searxng
             searxng["base_url"] = url
+    if "donsetch_bin" in settings:
+        binary = _present_desktop_text(settings.get("donsetch_bin"))
+        if binary:
+            donsetch = config.get("donsetch")
+            if not isinstance(donsetch, dict):
+                donsetch = {}
+                config["donsetch"] = donsetch
+            donsetch["binary"] = binary
     return config
 
 
@@ -1050,7 +1058,7 @@ def add_provider_setup_guidance(
     explicit = requested_provider in candidates
     preset = "self-hosted" if is_self_hosted_profile(config) else ("extract" if capability == "extract" else "starter")
     target = requested_provider if explicit else f"--preset {preset}"
-    command = f"python3 ~/.hermes/plugins/web-search-plus/setup.py setup {target}"
+    command = f"hermes web-search-plus setup {target}"
     message = (f"Requested provider '{requested_provider}' is not configured." if explicit
                else f"No configured {capability} provider is available for this request.")
     payload.update({
@@ -1060,7 +1068,7 @@ def add_provider_setup_guidance(
                      else preset_env_vars(preset)),
         "how_to_fix": [
             command,
-            "Store API keys in your Hermes profile .env, not inline in config.json. Keyless public endpoints require explicit opt-in.",
+            "Store API keys through Hermes (`hermes config set <ENV_VAR> <key>` or Hermes Desktop), not inline in config.json. Keyless public endpoints require explicit opt-in.",
         ],
     })
 

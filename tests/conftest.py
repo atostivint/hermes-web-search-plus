@@ -104,3 +104,13 @@ def _no_external_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", guarded_connect)
     yield
     assert not violations, f"test opened real network connections: {violations}"
+
+
+@pytest.fixture(autouse=True)
+def _reset_secret_resolver():
+    """A test that installs a credentials resolver must not leak it into the next test."""
+    from wsp_core import credentials
+
+    before = credentials.get_secret_resolver()
+    yield
+    credentials.set_secret_resolver(before)

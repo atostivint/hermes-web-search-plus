@@ -100,9 +100,9 @@ def missing_key_guidance(provider: str) -> dict:
         "env_var": env_var,
         "how_to_fix": [
             f"1. Get your API key from {spec.signup_url}",
-            f"2. Run: python3 ~/.hermes/plugins/web-search-plus/setup.py setup {provider}",
-            f"3. Or add {env_var} to your Hermes profile .env",
-            f"4. Or set environment variable: export {env_var}=\"your-key\"",
+            f"2. Run: hermes web-search-plus setup {provider}",
+            f"3. Store it through Hermes: hermes config set {env_var} <key> (or Hermes Desktop > Settings > Plugins > Web Search Plus)",
+            "4. Then run /reset so the tools see the new key",
         ],
         "provider": provider,
     }

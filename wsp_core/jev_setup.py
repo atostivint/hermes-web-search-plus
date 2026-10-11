@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 JEV_DECISIONS = ("search_type", "extract_quality", "language_fill")
 JEV_ENV = "TYPESAFE_API_KEY"
-JEV_ENV_FILE = "TYPESAFE_API_KEY_FILE"
 JEV_SIGNUP = "https://docs.typesafe.ai"
 JEV_MODEL = "jev-1.13.0"
 DEFAULT_MIN_CONFIDENCE = 0.85
@@ -31,23 +28,12 @@ def parse_decisions(raw: Optional[str]) -> tuple[str, ...]:
 
 
 def key_source(env: Optional[Mapping[str, str]] = None, config: Optional[Mapping[str, Any]] = None) -> Optional[str]:
+    """Where the TypeSafe key comes from: only ``TYPESAFE_API_KEY`` as Hermes resolves it.
+
+    Key files are no longer read (Hermes plugin rule 11); ``config`` is kept for callers.
+    """
     env = env or {}
-    if str(env.get(JEV_ENV) or "").strip():
-        return "env"
-    path = str(env.get(JEV_ENV_FILE) or "").strip()
-    if not path and isinstance(config, Mapping):
-        jev = config.get("jev")
-        if isinstance(jev, Mapping):
-            path = str(jev.get("api_key_file") or "").strip()
-            if str(jev.get("api_key") or "").strip():
-                return "config"
-    if path:
-        try:
-            if Path(path).expanduser().read_text(encoding="utf-8").strip():
-                return "file"
-        except OSError:
-            return None
-    return None
+    return "env" if str(env.get(JEV_ENV) or "").strip() else None
 
 
 def key_present(env: Optional[Mapping[str, str]] = None, config: Optional[Mapping[str, Any]] = None) -> bool:
@@ -64,25 +50,9 @@ def apply_jev_config(config: dict[str, Any], *, enabled: bool, decisions: Sequen
     jev.setdefault("search_type_min_confidence", SEARCH_TYPE_MIN_CONFIDENCE)
     jev.setdefault("timeout_s", 8.0)
     jev.pop("api_key", None)
+    jev.pop("api_key_file", None)  # key files are no longer read; the key lives in Hermes
     config["jev"] = jev
     return config
-
-
-def persist_key_file(secret: str, dest: Optional[Path] = None) -> Path:
-    """Write the TypeSafe key to a 0600 file. Never return the secret."""
-    text = (secret or "").strip()
-    if not text:
-        raise ValueError("empty key")
-    path = dest or (
-        Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
-        / "secrets"
-        / "typesafe_api_key"
-    )
-    path = path.expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text + "\n", encoding="utf-8")
-    path.chmod(0o600)
-    return path
 
 
 def status_payload(env: Optional[Mapping[str, str]] = None, config: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
@@ -105,7 +75,7 @@ def plan_lines(*, want_enable: Optional[bool], decisions: Sequence[str], has_key
     lines = [
         "Optional Jev — default off. Not a search provider.",
         f"  Signup: {JEV_SIGNUP}",
-        "  Uses TYPESAFE_API_KEY_FILE (preferred) or TYPESAFE_API_KEY. Secrets are never printed.",
+        "  Reads TYPESAFE_API_KEY through Hermes. Secrets are never printed.",
         "  Decisions: search_type overlay, extract_quality, language_fill.",
     ]
     if want_enable is False:
@@ -115,6 +85,6 @@ def plan_lines(*, want_enable: Optional[bool], decisions: Sequence[str], has_key
         lines.append("  Plan: ask whether to enable (default no).")
         return lines
     names = ", ".join(decisions) if decisions else "(none)"
-    key_note = "key already present" if has_key else "will store TYPESAFE_API_KEY_FILE"
+    key_note = "key already present" if has_key else "store the key with `hermes config set TYPESAFE_API_KEY <key>`"
     lines.append(f"  Plan: enable Jev ({names}); {key_note}.")
     return lines

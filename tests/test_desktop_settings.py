@@ -556,3 +556,30 @@ def test_status_without_desktop_settings_names_no_desktop_source(tmp_path):
     _write_plugin_config(home, {})
 
     assert "from Hermes Desktop settings" not in _status(tmp_path, home)
+
+
+def test_donsetch_binary_desktop_field_sets_the_binary_path(tmp_path, monkeypatch):
+    path = _write_plugin_config(tmp_path, {"version": 1})
+    (tmp_path / "config.yaml").write_text(
+        "plugins:\n  entries:\n    web-search-plus:\n      settings: {donsetch_bin: /opt/donsetch/bin/donsetch}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WEB_SEARCH_PLUS_CONFIG", str(path))
+
+    assert load_config()["donsetch"]["binary"] == "/opt/donsetch/bin/donsetch"
+
+
+def test_manifest_covers_every_provider_key_and_points_onboarding_at_the_hermes_cli():
+    from wsp_core.provider_registry import PROVIDER_SPECS
+
+    text = (ROOT / "plugin.yaml").read_text(encoding="utf-8")
+    secrets = set(_schema_secret_fields(text).values())
+    for spec in PROVIDER_SPECS.values():
+        if spec.provider in {"searxng", "donsetch"} or spec.keyless and not spec.env_var:
+            continue
+        assert spec.env_var in secrets, spec.env_var
+    assert {"TINYFISH_API_KEY", "MONID_API_KEY", "TYPESAFE_API_KEY"} <= secrets
+    # Non-secret values are plain fields: a path and a URL, never a masked secret.
+    assert {"donsetch_bin", "searxng_url"} <= _schema_setting_fields(text)
+    assert "setup.py" not in "\n".join(_yaml_block(text, "onboarding:"))
+    assert "hermes web-search-plus status" in text
