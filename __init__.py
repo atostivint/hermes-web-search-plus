@@ -44,7 +44,8 @@ from .wsp_core.provider_registry import (
     keyless_public_env_var,
     plugin_catalog,
 )
-from .wsp_core.env_loader import clean_env_value as _shared_clean_env_value, get_hermes_env_path, is_truthy, load_env_files
+from .wsp_core.credentials import get_secret, is_secret_scope_error, set_secret_resolver
+from .wsp_core.env_loader import clean_env_value as _shared_clean_env_value, get_hermes_env_path, is_truthy
 from .wsp_core.cache import MAX_STORED_TEXT_CHARS, store_web_text
 from .wsp_core.config import (
     ORDER_AUTO_WORDS,
@@ -78,12 +79,9 @@ def _clean_env_value(value: str) -> Optional[str]:
 _PROVIDER_CATALOG = plugin_catalog()
 
 
-def _load_plugin_env() -> None:
-    """Load plugin-local, legacy parent, and Hermes profile .env files."""
-    load_env_files(__file__)
-
-# Load plugin .env on import
-_load_plugin_env()
+# Credentials come only from Hermes (catalog rule 11): register() installs
+# agent.secret_scope.get_secret as the engine's resolver. The plugin never
+# loads .env files itself.
 
 
 def _get_provider_catalog() -> List[Dict[str, Any]]:
@@ -404,7 +402,7 @@ def _render_fastpath_report(report: Mapping[str, Any]) -> str:
 
 def _keyless_public_opted_in(provider: str, config_path: Optional[Path] = None) -> bool:
     """Registration-path mirror of config.keyless_public_allowed (env var or config.json, default off)."""
-    if is_truthy(os.environ.get(keyless_public_env_var(provider))):
+    if is_truthy(get_secret(keyless_public_env_var(provider))):
         return True
     try:
         config_path = config_path or _get_plugin_config_path()
@@ -439,7 +437,9 @@ def _config_provider_configured(providers: List[str]) -> bool:
         try:
             if provider_configured(provider, config):
                 return True
-        except Exception:
+        except Exception as exc:
+            if is_secret_scope_error(exc):
+                raise
             continue
     return False
 
@@ -1685,6 +1685,14 @@ def _call_with_timeout(fn: Callable[[], dict], timeout: int) -> dict:
     return DaemonTask(fn).result(timeout=timeout)
 
 
+_SECRET_SCOPE_ERROR_TYPE = "secret_scope_error"
+
+
+def _scope_error_type(exc: BaseException) -> Dict[str, str]:
+    """Tag a failed credential read (Hermes refused an unscoped read) for callers."""
+    return {"error_type": _SECRET_SCOPE_ERROR_TYPE} if is_secret_scope_error(exc) else {}
+
+
 def _run_search(
     query: str,
     provider: str = "auto",
@@ -1727,7 +1735,7 @@ def _run_search(
     except FuturesTimeout:
         return {"error": f"Search timed out after {timeout}s", "provider": provider, "query": query, "results": []}
     except Exception as e:
-        return {"error": str(e), "provider": provider, "query": query, "results": []}
+        return {"error": str(e), "provider": provider, "query": query, "results": [], **_scope_error_type(e)}
 
 
 def _run_extract(
@@ -1759,7 +1767,7 @@ def _run_extract(
     except FuturesTimeout:
         return {"error": f"Extract timed out after {timeout}s", "provider": provider, "results": []}
     except Exception as e:
-        return {"error": str(e), "provider": provider, "results": []}
+        return {"error": str(e), "provider": provider, "results": [], **_scope_error_type(e)}
 
 
 def _source_total_chars(src: dict, shown: int) -> int:
@@ -2151,8 +2159,34 @@ def _format_extract_results(data: dict) -> str:
     return "\n".join(lines).strip()
 
 
+_HERMES_RESOLVER_FALLBACK_LOGGED = False
+
+
+def _install_hermes_secret_resolver() -> None:
+    """Read credentials through Hermes' profile-scoped ``get_secret``.
+
+    Older Hermes builds without ``agent.secret_scope`` keep the process
+    environment (resolver ``None``); that is logged once.
+    """
+    global _HERMES_RESOLVER_FALLBACK_LOGGED
+    try:
+        from agent.secret_scope import get_secret as hermes_get_secret
+    except ImportError:
+        set_secret_resolver(None)
+        if not _HERMES_RESOLVER_FALLBACK_LOGGED:
+            _HERMES_RESOLVER_FALLBACK_LOGGED = True
+            logger.info(
+                "web-search-plus: this Hermes has no agent.secret_scope; "
+                "provider keys are read from the process environment"
+            )
+        return
+    set_secret_resolver(hermes_get_secret)
+
+
 def register(ctx: Any) -> None:
     """Register web-search-plus tools with Hermes plugin system."""
+
+    _install_hermes_secret_resolver()
 
     schema = {
         "name": "web_search_plus",
@@ -2335,13 +2369,13 @@ def register(ctx: Any) -> None:
         return _format_results(data)
 
     def check_fn() -> bool:
-        if any(os.environ.get(k) for k in _PROVIDER_ENV_KEYS) or any(
+        if any(get_secret(k) for k in _PROVIDER_ENV_KEYS) or any(
                 _keyless_public_opted_in(p) for p in _KEYLESS_PROVIDER_IDS):
             return True
         return _config_provider_configured(list(SEARCH_PROVIDER_IDS))
 
     def extract_check_fn() -> bool:
-        if any(os.environ.get(k) for k in _EXTRACT_PROVIDER_ENV_KEYS) or any(
+        if any(get_secret(k) for k in _EXTRACT_PROVIDER_ENV_KEYS) or any(
                 _keyless_public_opted_in(p) for p in _KEYLESS_EXTRACT_PROVIDER_IDS):
             return True
         return _config_provider_configured(list(EXTRACT_PROVIDER_IDS))

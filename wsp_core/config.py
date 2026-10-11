@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .env_loader import clean_env_value as _shared_clean_env_value, is_truthy, load_env_files
+from .credentials import get_secret
+from .env_loader import clean_env_value as _shared_clean_env_value, is_truthy
 from .errors_v3 import MissingProviderKeyError, ProviderConfigError
 from .provider_registry import (
     DEFAULT_AUTO_ALLOW,
@@ -65,10 +66,6 @@ def _clean_env_value(value: str) -> Optional[str]:
 # used to hang off this module's own location now hang off the host dir.
 HOST_DIR = Path(__file__).parent.parent
 
-
-def _load_env_file():
-    """Load plugin-local, legacy parent, and Hermes profile .env files."""
-    load_env_files(HOST_DIR / "__init__.py")
 
 DEFAULT_CONFIG = {
     "version": 1,
@@ -573,7 +570,7 @@ def _validate_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(jev, dict):
         raise ValueError("jev must be an object")
     if "api_key" in jev and str(jev.get("api_key") or "").strip():
-        raise ValueError("jev.api_key is not allowed; use TYPESAFE_API_KEY_FILE")
+        raise ValueError("jev.api_key is not allowed; set TYPESAFE_API_KEY in your Hermes profile")
     for flag in ("enabled", "search_type", "extract_quality", "language_fill"):
         if not isinstance(jev.get(flag, False), bool):
             raise ValueError(f"jev.{flag} must be a boolean")
@@ -1000,7 +997,9 @@ def get_api_key(provider: str, config: Dict[str, Any] = None) -> Optional[str]:
 
     # Then check environment
     spec = PROVIDER_SPECS.get(provider)
-    return _clean_env_value(os.environ.get(spec.env_var if spec else "", ""))
+    if spec is None:
+        return None
+    return _clean_env_value(get_secret(spec.env_var) or "")
 
 
 def keyless_public_allowed(provider: str, config: Dict[str, Any] = None) -> bool:
@@ -1015,7 +1014,7 @@ def keyless_public_allowed(provider: str, config: Dict[str, Any] = None) -> bool
     section = (config or {}).get(spec.config_section, {})
     if isinstance(section, dict) and is_truthy(section.get("allow_public")):
         return True
-    return is_truthy(os.environ.get(keyless_public_env_var(provider)))
+    return is_truthy(get_secret(keyless_public_env_var(provider)))
 
 
 def provider_configured(provider: str, config: Dict[str, Any] = None) -> bool:
@@ -1097,7 +1096,7 @@ def _validate_searxng_url(url: str) -> str:
 
     # Resolve hostname and check for private/internal IPs
     # Operators who intentionally self-host on private networks can opt out
-    allow_private = os.environ.get("SEARXNG_ALLOW_PRIVATE", "").strip() == "1"
+    allow_private = (get_secret("SEARXNG_ALLOW_PRIVATE") or "").strip() == "1"
     if not allow_private:
         # The verdict per host:port is cached for the process, so the eligibility
         # checks on every search do not each cost a DNS lookup. A failed
@@ -1147,7 +1146,7 @@ def get_searxng_instance_url(config: Dict[str, Any] = None) -> Optional[str]:
                 return _validate_searxng_url(url)
 
     # Then check environment
-    env_url = _clean_env_value(os.environ.get("SEARXNG_INSTANCE_URL", ""))
+    env_url = _clean_env_value(get_secret("SEARXNG_INSTANCE_URL") or "")
     if env_url:
         return _validate_searxng_url(env_url)
     return None
@@ -1189,5 +1188,3 @@ def validate_api_key(provider: str, config: Dict[str, Any] = None) -> Optional[s
 
     return key
 
-
-_load_env_file()
