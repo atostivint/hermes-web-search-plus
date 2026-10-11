@@ -1704,11 +1704,15 @@ def _execute_research_v3(
         attempted = engine.execute(contexts[provider], operation)
         receipts_by_provider[provider] = attempted.receipt
         if attempted.payload is None:
-            message = (
-                attempted.receipt.error.message
-                if attempted.receipt.error is not None
-                else "Provider attempt did not return a payload."
-            )
+            receipt = attempted.receipt
+            if receipt.error is not None:
+                message = receipt.error.message
+            elif receipt.skip_reason is not None:
+                # Same wording as normal search, e.g. a provider still blocked
+                # after "Out of credits" at its last call.
+                message = _SKIP_REASON_TEXT.get(receipt.skip_reason, receipt.skip_reason.value)
+            else:
+                message = "Provider attempt did not return a payload."
             raise ProviderRequestError(message)
         payloads_by_provider[provider] = attempted.payload
         return attempted.payload

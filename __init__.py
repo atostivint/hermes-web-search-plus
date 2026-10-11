@@ -993,7 +993,7 @@ def _render_status_dashboard(status: Optional[Dict[str, Any]] = None, *, color: 
     ])
     if status["search_configured"]:
         lines.extend([
-            "   After changing keys, start a fresh Hermes session (/reset) to reload them.",
+            "   After adding keys, run /reload in Hermes so the running agent reads them.",
             "   python3 ~/.hermes/plugins/web-search-plus/search.py --query \"Hermes Agent latest release\" --quality-report",
         ])
     return "\n".join(lines)
@@ -1074,7 +1074,7 @@ def _print_key_instructions(commands: List[str]) -> None:
     print(
         "  Or use Hermes Desktop: Settings > Plugins > Web Search Plus (masked key fields).\n"
         "  The command form puts the key on the command line, so your shell history keeps it; "
-        "Desktop avoids that. Then run /reset in Hermes so the tools see the key."
+        "Desktop avoids that. Then run /reload in Hermes so the running agent reads the key."
     )
 
 

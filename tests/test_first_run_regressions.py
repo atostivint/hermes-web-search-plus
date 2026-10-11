@@ -35,7 +35,7 @@ def test_configured_dashboard_recommends_search_and_reload():
     status = wsp._provider_config_status({'SERPER_API_KEY': 'fake-test-key'})
     text = wsp._render_status_dashboard(status, color=False)
     assert 'python3 ~/.hermes/plugins/web-search-plus/search.py --query' in text
-    assert '/reset' in text
+    assert '/reload' in text
     assert 'restart' not in text.lower()  # No unsafe generic restart prescription.
 
 
