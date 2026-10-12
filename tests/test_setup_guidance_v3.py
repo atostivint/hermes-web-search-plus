@@ -86,4 +86,4 @@ def test_missing_key_guidance_is_rebuilt_from_the_registry(monkeypatch):
     error = classify_provider_error(_config_error("tinyfish"), provider="tinyfish")
     steps = error.details["how_to_fix"]
     assert any(PROVIDER_SPECS["tinyfish"].signup_url in step for step in steps)
-    assert any("setup.py setup tinyfish" in step for step in steps)
+    assert any("hermes web-search-plus setup tinyfish" in step for step in steps)

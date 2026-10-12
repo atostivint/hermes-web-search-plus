@@ -17,6 +17,7 @@ from .contract_v3 import (
     ProviderAttemptV3,
     SkipReason,
 )
+from .credentials import is_secret_scope_error
 from .errors_v3 import classify_provider_error
 from .provider_health import MAX_RETRY_AFTER_WAIT_SECONDS, _retry_delay
 from .state_store_v3 import CircuitKey, SQLiteStateStore
@@ -357,6 +358,12 @@ class AttemptEngine:
                     )
                     if not reconciled_daily:
                         budget_decision = "store_unavailable"
+                if is_secret_scope_error(exc):
+                    # The host refused the credential read (e.g. Hermes
+                    # multiplexing without a profile scope): a configuration
+                    # error for the caller, not a provider failure to fall
+                    # back from.
+                    raise
                 classified = classify_provider_error(exc, provider=context.provider)
                 last_error = classified
                 encountered.add(classified.error_class)

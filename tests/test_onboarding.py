@@ -93,13 +93,19 @@ def test_provider_status_treats_template_placeholders_as_missing():
     assert status["providers"]["tavily"]["configured"] is True
 
 
-def test_read_env_file_omits_template_placeholders(tmp_path):
-    env_path = tmp_path / ".env"
-    env_path.write_text("SERPER_API_KEY=***\nLINKUP_API_KEY=real-linkup-key\n")
+def test_credential_env_reads_through_the_resolver_and_omits_placeholders(monkeypatch):
+    values = {"SERPER_API_KEY": "***", "LINKUP_API_KEY": "real-linkup-key", "BRAVE_API_KEY": ""}
+    monkeypatch.setattr(wsp, "get_secret", lambda name, default=None: values.get(name, default))
 
-    values = wsp._read_env_file(env_path)
+    assert wsp._credential_env() == {"LINKUP_API_KEY": "real-linkup-key"}
 
-    assert values == {"LINKUP_API_KEY": "real-linkup-key"}
+
+def test_credential_env_covers_every_name_the_engine_reads():
+    names = set(wsp._credential_env_names())
+
+    assert {item["env"] for item in wsp._get_provider_catalog()} <= names
+    assert {"DONSETCH_BIN", "TYPESAFE_API_KEY", "SEARXNG_ALLOW_PRIVATE", "KEENABLE_ALLOW_PUBLIC"} <= names
+    assert "TYPESAFE_API_KEY_FILE" not in names
 
 
 def test_provider_status_allows_search_only_with_extraction_hint():
@@ -125,34 +131,15 @@ def test_setup_guidance_points_unconfigured_users_to_one_simple_path():
     assert "BRAVE_API_KEY" in text
     assert "EXA_API_KEY" in text
     assert "LINKUP_API_KEY" in text
-    assert "python3 ~/.hermes/plugins/web-search-plus/setup.py setup" in text
-    assert "hermes web-search-plus setup" not in text
+    assert "hermes web-search-plus setup" in text
+    assert "hermes config set BRAVE_API_KEY <key>" in text
+    assert "setup.py" not in text
 
 
-def test_env_upsert_writes_selected_provider_keys_without_leaking_values(tmp_path):
-    env_path = tmp_path / ".env"
-    env_path.write_text("EXISTING=1\nTAVILY_API_KEY=old\n")
-
-    result = wsp._upsert_env_values(env_path, {"TAVILY_API_KEY": "new-secret", "LINKUP_API_KEY": "lk-secret"})
-
-    written = env_path.read_text()
-    assert "TAVILY_API_KEY=new-secret" in written
-    assert "LINKUP_API_KEY=lk-secret" in written
-    assert "EXISTING=1" in written
-    assert result == {"updated": ["TAVILY_API_KEY"], "added": ["LINKUP_API_KEY"]}
-
-
-@pytest.mark.skipif(os.name != "posix", reason="POSIX file permissions")
-def test_env_upsert_restricts_env_file_permissions(tmp_path):
-    new_env = tmp_path / "new" / ".env"
-    wsp._upsert_env_values(new_env, {"TAVILY_API_KEY": "secret"})
-    assert (new_env.stat().st_mode & 0o777) == 0o600
-
-    existing = tmp_path / ".env"
-    existing.write_text("EXISTING=1\n")
-    existing.chmod(0o644)
-    wsp._upsert_env_values(existing, {"TAVILY_API_KEY": "secret"})
-    assert (existing.stat().st_mode & 0o777) == 0o600
+def test_setup_has_no_env_file_readers_or_writers():
+    # Rule 11: keys are read through Hermes and stored with `hermes config set`.
+    for name in ("_read_env_file", "_effective_env", "_upsert_env_values", "_get_hermes_env_path"):
+        assert not hasattr(wsp, name), name
 
 
 def test_on_session_start_hint_is_one_shot_when_unconfigured(tmp_path):
@@ -186,7 +173,7 @@ def test_setup_command_treats_eof_as_blank_input(monkeypatch, capsys):
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     args = parser.parse_args(["setup"])
-    monkeypatch.setattr(wsp.getpass, "getpass", lambda _prompt: (_ for _ in ()).throw(EOFError()))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": (_ for _ in ()).throw(EOFError()))
 
     args.func(args)
 
@@ -194,7 +181,7 @@ def test_setup_command_treats_eof_as_blank_input(monkeypatch, capsys):
     assert "Setup plan:" in out
     for item in wsp._providers_for_preset("starter"):
         assert item["display_name"] in out
-    assert "No keys entered; nothing changed." in out
+    assert "Nothing changed in the routing config." in out
 
 
 def test_status_dashboard_is_secret_safe_and_actionable():
@@ -204,8 +191,9 @@ def test_status_dashboard_is_secret_safe_and_actionable():
     assert "✓ search" in text
     assert "• extraction" in text
     assert "super-secret" not in text
-    assert "setup.py setup" in text
-    assert "setup.py setup --preset starter" not in text
+    assert "hermes web-search-plus setup" in text
+    assert "hermes web-search-plus setup --preset starter" not in text
+    assert "setup.py" not in text
 
 
 def test_setup_presets_choose_expected_providers():
@@ -268,7 +256,6 @@ def test_setup_dry_run_prints_plan_without_prompting(monkeypatch, capsys):
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     args = parser.parse_args(["setup", "--preset", "lean", "--dry-run"])
-    monkeypatch.setattr(wsp.getpass, "getpass", lambda _prompt: (_ for _ in ()).throw(AssertionError("should not prompt")))
 
     args.func(args)
 
@@ -279,37 +266,148 @@ def test_setup_dry_run_prints_plan_without_prompting(monkeypatch, capsys):
     assert "Dry run only" in out
 
 
-def test_setup_dry_run_uses_target_env_path_for_dashboard(tmp_path, monkeypatch, capsys):
+def _install_fake_resolver(monkeypatch, values):
+    from wsp_core import credentials
+
+    monkeypatch.setattr(credentials, "_resolver", lambda name, default=None: values.get(name, default))
+
+
+def test_setup_dry_run_dashboard_reads_the_hermes_resolver_not_the_process_env(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("BRAVE_API_KEY", "live-env-should-not-count")
-    env_path = tmp_path / ".env"
-    env_path.write_text("YOU_API_KEY=x\n")
+    _install_fake_resolver(monkeypatch, {"YOU_API_KEY": "x"})
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["setup", "--preset", "starter", "--dry-run", "--env-path", str(env_path)])
+    args = parser.parse_args(["setup", "--preset", "starter", "--dry-run"])
 
     args.func(args)
 
     out = capsys.readouterr().out
     assert "Providers: 1/15 configured" in out
     assert "Active: You.com" in out
-    # The live BRAVE_API_KEY must not count; the dashboard reports it missing.
+    # The process BRAVE_API_KEY is not what the Hermes profile sees; the dashboard reports it missing.
     assert "would use Brave Search (BRAVE_API_KEY missing)" in out.split("Setup plan:", 1)[0]
+    assert "hermes config set BRAVE_API_KEY <key>" in out
 
 
-def test_status_uses_target_env_path_for_dashboard(tmp_path, monkeypatch, capsys):
+def test_status_reflects_the_hermes_resolver(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("BRAVE_API_KEY", "live-env-should-not-count")
-    env_path = tmp_path / ".env"
-    env_path.write_text("LINKUP_API_KEY=x\n")
+    _install_fake_resolver(monkeypatch, {"LINKUP_API_KEY": "x"})
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["status", "--env-path", str(env_path)])
+    args = parser.parse_args(["status", "--config-path", str(tmp_path / "config.json")])
 
     args.func(args)
 
     out = capsys.readouterr().out
     assert "Providers: 1/15 configured" in out
     assert "Active: Linkup" in out
-    assert "Active: Linkup, Brave" not in out and "Brave Search, " not in out
+    assert "Brave Search, " not in out
+
+
+def test_status_json_lists_configured_providers_from_the_resolver(tmp_path, monkeypatch, capsys):
+    _install_fake_resolver(monkeypatch, {"EXA_API_KEY": "exa-secret-value", "DONSETCH_BIN": ""})
+    parser = wsp.argparse.ArgumentParser()
+    wsp._web_search_plus_cli_setup(parser)
+    args = parser.parse_args(["status", "--json", "--config-path", str(tmp_path / "config.json")])
+
+    args.func(args)
+
+    out = capsys.readouterr().out
+    assert "exa-secret-value" not in out
+    providers = json.loads(out)["providers"]["providers"]
+    assert providers["exa"]["configured"] is True
+    assert providers["brave"]["configured"] is False
+
+
+def test_cli_handler_installs_the_hermes_resolver_once(monkeypatch):
+    import sys
+    import types
+
+    from wsp_core import credentials
+
+    calls = []
+    scope = types.ModuleType("agent.secret_scope")
+    scope.get_secret = lambda name, default=None: calls.append(name) or default
+    monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
+    monkeypatch.setitem(sys.modules, "agent.secret_scope", scope)
+    monkeypatch.setattr(credentials, "_resolver", None)
+
+    wsp._ensure_hermes_secret_resolver()
+    assert credentials.get_secret_resolver() is scope.get_secret
+    assert credentials.get_secret("BRAVE_API_KEY") is None and calls == ["BRAVE_API_KEY"]
+
+    other = lambda name, default=None: default  # noqa: E731
+    monkeypatch.setattr(credentials, "_resolver", other)
+    wsp._ensure_hermes_secret_resolver()
+    assert credentials.get_secret_resolver() is other
+
+
+def test_cli_handler_without_hermes_falls_back_to_the_process_environment(monkeypatch):
+    import sys
+
+    from wsp_core import credentials
+
+    # Both entries: a Hermes venv may already hold the real agent.secret_scope.
+    monkeypatch.setitem(sys.modules, "agent", None)  # import raises ImportError
+    monkeypatch.setitem(sys.modules, "agent.secret_scope", None)
+    monkeypatch.setattr(credentials, "_resolver", None)
+
+    wsp._ensure_hermes_secret_resolver()
+
+    assert credentials.get_secret_resolver() is None
+
+
+def test_setup_never_writes_an_env_file_or_credential_file(tmp_path, monkeypatch, capsys):
+    home = tmp_path / "hermes-home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_path = tmp_path / "plugins-config.json"
+    _isolate_keyless_env(monkeypatch, config_path)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)  # a real key in the shell hides the hint
+    parser = wsp.argparse.ArgumentParser()
+    wsp._web_search_plus_cli_setup(parser)
+    args = parser.parse_args([
+        "setup", "--preset", "all", "--jev", "--jev-key-file", str(tmp_path / "typesafe.key"),
+        "--keyless-public", "--env-path", str(home / ".env"), "--show-values", "--config-path", str(config_path),
+    ])
+    (tmp_path / "typesafe.key").write_text("file-secret-value\n")
+    before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+
+    args.func(args)
+
+    out = capsys.readouterr()
+    assert "file-secret-value" not in out.out + out.err
+    assert "hermes config set TYPESAFE_API_KEY <key>" in out.out
+    assert "--jev-key-file is ignored" in out.err
+    assert "TYPESAFE_API_KEY_FILE" not in out.out
+    assert "hermes config set BRAVE_API_KEY <key>" in out.out
+    assert "ignored since 5.1" in out.err
+    assert not list(tmp_path.rglob(".env*"))
+    assert not (home / "secrets").exists()
+    after = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+    # Only the routing config (plugin-owned data) may appear.
+    assert set(after) - set(before) <= {config_path.relative_to(tmp_path)}
+
+
+def test_setup_without_keys_prints_the_hermes_commands_and_no_key_prompt(tmp_path, monkeypatch, capsys):
+    config_path = tmp_path / "config.json"
+    _isolate_keyless_env(monkeypatch, config_path)
+    monkeypatch.setattr(wsp.sys, "stdin", _Stdin(False))
+    parser = wsp.argparse.ArgumentParser()
+    wsp._web_search_plus_cli_setup(parser)
+    args = parser.parse_args(["setup", "--no-jev", "--config-path", str(config_path)])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": (_ for _ in ()).throw(AssertionError("no prompt expected")))
+
+    args.func(args)
+
+    out = capsys.readouterr().out
+    for item in wsp._providers_for_preset("starter"):
+        assert f"hermes config set {item['env']} <key>" in out
+    assert "Settings > Plugins > Web Search Plus" in out
+    assert "shell history" in out
+    assert not config_path.exists()
 
 
 def test_register_exposes_core_independent_session_onboarding_surfaces():
@@ -317,9 +415,42 @@ def test_register_exposes_core_independent_session_onboarding_surfaces():
 
     wsp.register(ctx)
 
-    assert "web-search-plus" not in ctx.cli_commands
+    command = ctx.cli_commands["web-search-plus"]
+    assert command["setup_fn"] is wsp._web_search_plus_cli_setup
+    assert command["handler_fn"] is wsp._web_search_plus_cli_command
+    assert command["help"]
     assert "web-search-plus-setup" in ctx.commands
     assert "on_session_start" in ctx.hooks
+
+
+def test_register_skips_the_cli_command_when_hermes_has_no_cli_registration():
+    class OldCtx(FakeCtx):
+        """A Hermes without plugin CLI commands has no register_cli_command at all."""
+
+        def __getattribute__(self, name):
+            if name == "register_cli_command":
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+    ctx = OldCtx()
+
+    wsp.register(ctx)
+
+    assert ctx.cli_commands == {}
+    assert "web_search_plus" in ctx.tools
+    assert "web-search-plus-setup" in ctx.commands
+
+
+def test_registered_cli_parser_exposes_status_setup_and_config():
+    ctx = FakeCtx()
+    wsp.register(ctx)
+    parser = wsp.argparse.ArgumentParser(prog="hermes web-search-plus")
+
+    ctx.cli_commands["web-search-plus"]["setup_fn"](parser)
+
+    assert parser.parse_args(["status"]).func is wsp._web_search_plus_cli_command
+    assert parser.parse_args(["setup", "--dry-run"]).web_search_plus_command == "setup"
+    assert parser.parse_args(["config", "show"]).config_command == "show"
 
 
 def test_tool_check_functions_treat_missing_or_empty_keys_as_unconfigured(monkeypatch):
@@ -458,7 +589,7 @@ def test_setup_dry_run_can_auto_deny_provider(tmp_path, capsys):
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     args = parser.parse_args([
-        "setup", "--preset", "starter", "--dry-run", "--env-path", str(env_path), "--config-path", str(config_path),
+        "setup", "--preset", "starter", "--dry-run", "--config-path", str(config_path),
         "--auto-deny", "serpbase,querit"
     ])
 
@@ -510,14 +641,13 @@ def test_config_reset_creates_backup(tmp_path):
     assert list(tmp_path.glob("config.json.bak-*"))
 
 
-def test_status_json_includes_routing_without_secrets(tmp_path, capsys):
-    env_path = tmp_path / ".env"
-    env_path.write_text("TAVILY_API_KEY=tvly-secret-value\n")
+def test_status_json_includes_routing_without_secrets(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-secret-value")
     config_path = tmp_path / "config.json"
     config_path.write_text('{"version": 1, "default_provider": "tavily", "auto_routing": {"enabled": false}}\n')
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["status", "--json", "--env-path", str(env_path), "--config-path", str(config_path)])
+    args = parser.parse_args(["status", "--json", "--config-path", str(config_path)])
 
     args.func(args)
 
@@ -583,7 +713,7 @@ def test_setup_dry_run_with_routing_preferences_does_not_write(tmp_path, capsys)
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     args = parser.parse_args([
-        "setup", "--preset", "starter", "--dry-run", "--env-path", str(env_path), "--config-path", str(config_path),
+        "setup", "--preset", "starter", "--dry-run", "--config-path", str(config_path),
         "--routing", "fixed", "--default-provider", "brave", "--provider-priority", "brave,tavily,linkup"
     ])
 
@@ -646,16 +776,15 @@ def test_config_set_extract_priority_rejects_search_only_provider_without_writin
     assert not config_path.exists()
 
 
-def test_no_secret_leaks_across_status_and_config_commands(tmp_path, capsys):
+def test_no_secret_leaks_across_status_and_config_commands(tmp_path, monkeypatch, capsys):
     secret = "tvly-very-secret-value"
-    env_path = tmp_path / ".env"
-    env_path.write_text(f"TAVILY_API_KEY={secret}\n")
+    monkeypatch.setenv("TAVILY_API_KEY", secret)
     config_path = tmp_path / "config.json"
     config_path.write_text('{"version": 1, "default_provider": "tavily", "auto_routing": {"enabled": false}}\n')
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     for argv in [
-        ["status", "--json", "--env-path", str(env_path), "--config-path", str(config_path)],
+        ["status", "--json", "--config-path", str(config_path)],
         ["config", "show", "--json", "--config-path", str(config_path)],
         ["config", "show", "--config-path", str(config_path)],
     ]:
@@ -849,8 +978,7 @@ def test_setup_offers_keyless_public_tier_when_no_key_given(tmp_path, monkeypatc
     _isolate_keyless_env(monkeypatch, config_path)
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["setup", "keenable", "--env-path", str(env_path), "--config-path", str(config_path)])
-    monkeypatch.setattr(wsp.getpass, "getpass", lambda _prompt: "")
+    args = parser.parse_args(["setup", "keenable", "--config-path", str(config_path)])
     monkeypatch.setattr("builtins.input", lambda _prompt: "y")
 
     args.func(args)
@@ -864,13 +992,11 @@ def test_setup_offers_keyless_public_tier_when_no_key_given(tmp_path, monkeypatc
 
 
 def test_setup_keyless_public_flag_enables_without_prompting(tmp_path, monkeypatch, capsys):
-    env_path = tmp_path / ".env"
     config_path = tmp_path / "config.json"
     _isolate_keyless_env(monkeypatch, config_path)
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["setup", "keenable", "--keyless-public", "--env-path", str(env_path), "--config-path", str(config_path)])
-    monkeypatch.setattr(wsp.getpass, "getpass", lambda _prompt: "")
+    args = parser.parse_args(["setup", "keenable", "--keyless-public", "--config-path", str(config_path)])
     monkeypatch.setattr("builtins.input", lambda _prompt: (_ for _ in ()).throw(AssertionError("should not prompt for keyless when flag is set")))
 
     args.func(args)
@@ -880,35 +1006,31 @@ def test_setup_keyless_public_flag_enables_without_prompting(tmp_path, monkeypat
 
 
 def test_setup_declining_keyless_writes_nothing(tmp_path, monkeypatch, capsys):
-    env_path = tmp_path / ".env"
     config_path = tmp_path / "config.json"
     _isolate_keyless_env(monkeypatch, config_path)
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["setup", "keenable", "--env-path", str(env_path), "--config-path", str(config_path)])
-    monkeypatch.setattr(wsp.getpass, "getpass", lambda _prompt: "")
+    args = parser.parse_args(["setup", "keenable", "--config-path", str(config_path)])
     monkeypatch.setattr("builtins.input", lambda _prompt: "n")
 
     args.func(args)
 
-    assert "No keys entered; nothing changed." in capsys.readouterr().out
+    assert "Nothing changed in the routing config." in capsys.readouterr().out
     assert not config_path.exists()
 
 
 def test_setup_skips_keyless_prompt_when_already_opted_in(tmp_path, monkeypatch, capsys):
-    env_path = tmp_path / ".env"
     config_path = tmp_path / "config.json"
     config_path.write_text('{"version": 1, "keenable": {"allow_public": true}}\n')
     _isolate_keyless_env(monkeypatch, config_path)
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["setup", "keenable", "--env-path", str(env_path), "--config-path", str(config_path)])
-    monkeypatch.setattr(wsp.getpass, "getpass", lambda _prompt: "")
+    args = parser.parse_args(["setup", "keenable", "--config-path", str(config_path)])
     monkeypatch.setattr("builtins.input", lambda _prompt: (_ for _ in ()).throw(AssertionError("should not re-prompt when already opted in")))
 
     args.func(args)
 
-    assert "No keys entered; nothing changed." in capsys.readouterr().out
+    assert "Nothing changed in the routing config." in capsys.readouterr().out
 
 
 class _Stdin:
@@ -929,9 +1051,8 @@ def _run_starter_setup(tmp_path, monkeypatch, *, tty: bool, answer: str, config_
     monkeypatch.setattr(wsp.sys, "stdin", _Stdin(tty))
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["setup", "--no-jev", "--env-path", str(env_path), "--config-path", str(config_path)])
+    args = parser.parse_args(["setup", "--no-jev", "--config-path", str(config_path)])
     prompts = []
-    monkeypatch.setattr(wsp.getpass, "getpass", lambda _prompt: "")
     monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or (answer(prompt) if callable(answer) else answer))
 
     args.func(args)
@@ -959,7 +1080,7 @@ def test_starter_setup_without_any_key_declines_keyless_start_unless_told_yes(tm
     env_path, config_path, prompts = _run_starter_setup(tmp_path, monkeypatch, tty=True, answer=answer)
 
     assert any("Start without a key using Keenable" in prompt for prompt in prompts)
-    assert "No keys entered; nothing changed." in capsys.readouterr().out
+    assert "Nothing changed in the routing config." in capsys.readouterr().out
     assert not _allow_public_written(config_path)
     assert not env_path.exists()
 
@@ -986,14 +1107,14 @@ def test_starter_setup_without_a_terminal_never_opts_in_to_keyless(tmp_path, mon
     assert not any("Keenable" in prompt for prompt in prompts)
     assert "--keyless-public" in out
     assert "unauthenticated public service" in out
-    assert "No keys entered; nothing changed." in out
+    assert "Nothing changed in the routing config." in out
     assert not _allow_public_written(config_path)
     assert not env_path.exists()
 
 
-def test_piped_blank_lines_do_not_opt_in_to_keyless(tmp_path):
+@pytest.mark.parametrize("command", ["status", "setup", "bench"])
+def test_standalone_setup_script_points_key_commands_to_the_hermes_cli(tmp_path, command):
     script = Path(__file__).resolve().parents[1] / "setup.py"
-    env_path = tmp_path / ".env"
     config_path = tmp_path / "config.json"
     clean_env = {
         "PATH": os.environ.get("PATH", ""),
@@ -1003,17 +1124,37 @@ def test_piped_blank_lines_do_not_opt_in_to_keyless(tmp_path):
     }
 
     result = subprocess.run(
-        [sys.executable, str(script), "setup", "--no-jev", "--env-path", str(env_path), "--config-path", str(config_path)],
+        [sys.executable, str(script), command, "--env-path", str(tmp_path / ".env"), "--config-path", str(config_path)]
+        if command != "bench" else [sys.executable, str(script), command],
         input="\n" * 40,
+        env=clean_env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert f"hermes web-search-plus {command}" in result.stderr
+    assert "hermes config set BRAVE_API_KEY <key>" in result.stderr
+    assert result.stdout == ""
+    assert not config_path.exists()
+    assert not list(tmp_path.rglob(".env*"))
+
+
+def test_standalone_setup_script_still_runs_config_json_commands(tmp_path):
+    script = Path(__file__).resolve().parents[1] / "setup.py"
+    config_path = tmp_path / "config.json"
+    clean_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "HERMES_HOME": str(tmp_path / "hermes")}
+
+    result = subprocess.run(
+        [sys.executable, str(script), "config", "set-routing", "off", "--config-path", str(config_path)],
         env=clean_env,
         check=True,
         text=True,
         capture_output=True,
     )
 
-    assert "--keyless-public" in result.stdout
-    assert "No keys entered; nothing changed." in result.stdout
-    assert not _allow_public_written(config_path)
+    assert "Updated routing config" in result.stdout
+    assert json.loads(config_path.read_text())["auto_routing"]["enabled"] is False
 
 
 def test_starter_setup_with_a_search_key_in_the_process_environment_does_not_offer_keyless(tmp_path, monkeypatch, capsys):
@@ -1041,8 +1182,8 @@ def test_starter_setup_with_a_search_provider_in_the_config_does_not_offer_keyle
     assert not any("Keenable" in prompt for prompt in prompts)
 
 
-def test_starter_setup_with_a_search_key_in_the_env_file_does_not_offer_keyless(tmp_path, monkeypatch):
-    (tmp_path / ".env").write_text("EXA_API_KEY=exa-file-key-123456\n")
+def test_starter_setup_with_a_search_key_from_the_hermes_resolver_does_not_offer_keyless(tmp_path, monkeypatch):
+    _install_fake_resolver(monkeypatch, {"EXA_API_KEY": "exa-profile-key-123456"})
 
     env_path, config_path, prompts = _run_starter_setup(tmp_path, monkeypatch, tty=True, answer="y")
 
@@ -1056,15 +1197,16 @@ def test_starter_setup_with_a_search_key_does_not_offer_keyless(tmp_path, monkey
     _isolate_keyless_env(monkeypatch, config_path)
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
-    args = parser.parse_args(["setup", "--no-jev", "--env-path", str(env_path), "--config-path", str(config_path)])
-    monkeypatch.setattr(wsp.getpass, "getpass", lambda prompt: "fake-brave-key" if "BRAVE_API_KEY" in prompt else "")
+    args = parser.parse_args(["setup", "--no-jev", "--config-path", str(config_path)])
+    monkeypatch.setenv("BRAVE_API_KEY", "fake-brave-key")
     monkeypatch.setattr("builtins.input", lambda prompt: (_ for _ in ()).throw(AssertionError(prompt)))
 
     args.func(args)
 
     out = capsys.readouterr().out
     assert "fake-brave-key" not in out
-    assert "BRAVE_API_KEY" in env_path.read_text()
+    assert "BRAVE_API_KEY [set]" in out
+    assert not env_path.exists()
     assert not config_path.exists() or "allow_public" not in config_path.read_text()
 
 
@@ -1202,3 +1344,22 @@ def test_fastpath_report_handles_missing_hermes_config(tmp_path):
     checks = {check["id"]: check for check in report["checks"]}
     assert checks["hermes_config_found"]["ok"] is False
     assert checks["legacy_web_toolset_disabled"]["ok"] is False
+
+
+def test_session_hint_never_breaks_the_session_when_the_profile_scope_is_missing(tmp_path, monkeypatch):
+    from wsp_core import credentials
+
+    def refuse(name, default=None):
+        raise RuntimeError("no profile scope")
+
+    monkeypatch.setattr(credentials, "_resolver", refuse)
+
+    assert wsp._unconfigured_session_hint(state_path=tmp_path / "state.json") is None
+    assert not (tmp_path / "state.json").exists()
+
+
+def test_session_hint_names_the_hermes_command(tmp_path):
+    hint = wsp._unconfigured_session_hint(env={}, state_path=tmp_path / "state.json")
+
+    assert "hermes web-search-plus setup" in hint["message"]
+    assert "setup.py" not in hint["message"]

@@ -26,7 +26,7 @@ def isolated_credentials(monkeypatch):
 
 def test_empty_dashboard_recommends_setup_not_search():
     text = wsp._render_status_dashboard(wsp._provider_config_status({}), color=False)
-    assert 'python3 ~/.hermes/plugins/web-search-plus/setup.py setup' in text
+    assert 'hermes web-search-plus setup' in text
     assert 'Brave + Serper + Exa + Linkup' in text
     assert 'search.py --query' not in text
 
@@ -35,7 +35,7 @@ def test_configured_dashboard_recommends_search_and_reload():
     status = wsp._provider_config_status({'SERPER_API_KEY': 'fake-test-key'})
     text = wsp._render_status_dashboard(status, color=False)
     assert 'python3 ~/.hermes/plugins/web-search-plus/search.py --query' in text
-    assert '/reset' in text
+    assert '/reload' in text
     assert 'restart' not in text.lower()  # No unsafe generic restart prescription.
 
 
@@ -73,8 +73,9 @@ def test_missing_key_guidance_uses_setup_and_env_not_inline_config():
         config.validate_api_key('serper', {})
     payload = json.loads(str(exc.value))
     guidance = '\n'.join(payload['how_to_fix'])
-    assert 'setup.py setup serper' in guidance
-    assert '.env' in guidance
+    assert 'hermes web-search-plus setup serper' in guidance
+    assert 'hermes config set SERPER_API_KEY' in guidance
+    assert '.env' not in guidance
     assert 'config.json' not in guidance
     assert payload['env_var'] == 'SERPER_API_KEY'
 
@@ -84,7 +85,7 @@ def test_no_key_search_has_top_level_actionable_error():
     payload, code = search.execute_search_request(args, config_module._deepcopy_default_config())
     assert code != 0
     assert payload['error_type'] == 'provider_setup_required'
-    assert 'setup.py setup --preset starter' in '\n'.join(payload['how_to_fix'])
+    assert 'hermes web-search-plus setup --preset starter' in '\n'.join(payload['how_to_fix'])
     assert isinstance(payload['provider_errors'][0]['error'], str)
     assert not payload['provider_errors'][0]['error'].startswith('{')
 
@@ -92,7 +93,7 @@ def test_no_key_search_has_top_level_actionable_error():
 def test_native_search_no_key_has_actionable_error():
     payload = search.run_search_request(query='offline first run', no_cache=True, config=config_module._deepcopy_default_config())
     assert payload['error_type'] == 'provider_setup_required'
-    assert 'setup.py setup --preset starter' in '\n'.join(payload['how_to_fix'])
+    assert 'hermes web-search-plus setup --preset starter' in '\n'.join(payload['how_to_fix'])
     assert not payload['provider_errors'][0]['error'].startswith('{')
 
 
@@ -117,7 +118,7 @@ def test_setup_guidance_respects_keyless_opt_in():
 def test_no_key_extract_has_actionable_error():
     payload = extract.extract_plus(['https://example.com'], config=config_module._deepcopy_default_config())
     assert payload['error_type'] == 'provider_setup_required'
-    assert 'setup.py setup --preset extract' in '\n'.join(payload['how_to_fix'])
+    assert 'hermes web-search-plus setup --preset extract' in '\n'.join(payload['how_to_fix'])
     assert payload['env_vars']
 
 
@@ -182,7 +183,7 @@ def test_explicit_missing_key_targets_requested_provider(monkeypatch, entrypoint
         payload = search.run_search_request(query='offline explicit', provider='serpbase', no_cache=True, config=cfg)
     assert payload['error_type'] == 'requested_provider_not_configured'
     assert "Requested provider 'serpbase' is not configured" in payload['error']
-    assert 'setup.py setup serpbase' in '\n'.join(payload['how_to_fix'])
+    assert 'hermes web-search-plus setup serpbase' in '\n'.join(payload['how_to_fix'])
     assert '--preset starter' not in '\n'.join(payload['how_to_fix'])
     assert payload['env_vars'] == ['SERPBASE_API_KEY']
 
@@ -190,7 +191,7 @@ def test_explicit_missing_key_targets_requested_provider(monkeypatch, entrypoint
 def test_explicit_extract_missing_key_targets_requested_provider():
     payload = extract.extract_plus(['https://example.com'], provider='firecrawl', config=config_module._deepcopy_default_config())
     assert payload['error_type'] == 'requested_provider_not_configured'
-    assert 'setup.py setup firecrawl' in '\n'.join(payload['how_to_fix'])
+    assert 'hermes web-search-plus setup firecrawl' in '\n'.join(payload['how_to_fix'])
     assert payload['env_vars'] == ['FIRECRAWL_API_KEY']
 
 

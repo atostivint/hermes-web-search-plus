@@ -1,10 +1,15 @@
+"""env_loader stays a utility for hosts that vendor wsp_core (MCP server, OpenClaw skill).
+
+The Hermes plugin and the engine never call it; tests/test_secret_scope.py
+checks that no .env file is opened. These tests call ``load_env_files``
+directly with the anchor file a host would pass.
+"""
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from wsp_core import search
 from wsp_core import config
 from wsp_core import env_loader
 
@@ -18,11 +23,10 @@ class EnvLoadingTests(unittest.TestCase):
             fake_script.write_text("# fake")
             (plugin_dir / ".env").write_text("LINKUP_API_KEY=local-plugin-key\n")
 
-            with mock.patch.object(search, "__file__", str(fake_script)):
-                with mock.patch.object(env_loader, "get_hermes_env_path", return_value=Path(tmp) / "missing-hermes.env"):
-                    with mock.patch.dict(os.environ, {}, clear=True):
-                        search._load_env_file()
-                        self.assertEqual(os.environ.get("LINKUP_API_KEY"), "local-plugin-key")
+            with mock.patch.object(env_loader, "get_hermes_env_path", return_value=Path(tmp) / "missing-hermes.env"):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    env_loader.load_env_files(fake_script)
+                    self.assertEqual(os.environ.get("LINKUP_API_KEY"), "local-plugin-key")
 
     def test_load_env_file_ignores_template_placeholders(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -32,14 +36,13 @@ class EnvLoadingTests(unittest.TestCase):
             fake_script.write_text("# fake")
             (plugin_dir / ".env").write_text("SERPER_API_KEY=***\nLINKUP_API_KEY=real-linkup-key\n")
 
-            with mock.patch.object(search, "__file__", str(fake_script)):
-                with mock.patch.object(env_loader, "get_hermes_env_path", return_value=Path(tmp) / "missing-hermes.env"):
-                    with mock.patch.dict(os.environ, {}, clear=True):
-                        search._load_env_file()
-                        self.assertIsNone(os.environ.get("SERPER_API_KEY"))
-                        self.assertEqual(os.environ.get("LINKUP_API_KEY"), "real-linkup-key")
+            with mock.patch.object(env_loader, "get_hermes_env_path", return_value=Path(tmp) / "missing-hermes.env"):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    env_loader.load_env_files(fake_script)
+                    self.assertIsNone(os.environ.get("SERPER_API_KEY"))
+                    self.assertEqual(os.environ.get("LINKUP_API_KEY"), "real-linkup-key")
 
-    def test_search_load_env_file_reads_hermes_profile_env(self):
+    def test_load_env_files_reads_hermes_profile_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin_dir = Path(tmp) / "web-search-plus"
             plugin_dir.mkdir()
@@ -49,13 +52,12 @@ class EnvLoadingTests(unittest.TestCase):
             hermes_env.parent.mkdir()
             hermes_env.write_text("TAVILY_API_KEY=tvly-from-hermes\n")
 
-            with mock.patch.object(search, "__file__", str(fake_script)):
-                with mock.patch.object(env_loader, "get_hermes_env_path", return_value=hermes_env):
-                    with mock.patch.dict(os.environ, {}, clear=True):
-                        search._load_env_file()
-                        self.assertEqual(os.environ.get("TAVILY_API_KEY"), "tvly-from-hermes")
+            with mock.patch.object(env_loader, "get_hermes_env_path", return_value=hermes_env):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    env_loader.load_env_files(fake_script)
+                    self.assertEqual(os.environ.get("TAVILY_API_KEY"), "tvly-from-hermes")
 
-    def test_config_load_env_file_reads_hermes_profile_env(self):
+    def test_load_env_files_reads_hermes_profile_env_for_any_anchor(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin_dir = Path(tmp) / "web-search-plus"
             plugin_dir.mkdir()
@@ -65,11 +67,10 @@ class EnvLoadingTests(unittest.TestCase):
             hermes_env.parent.mkdir()
             hermes_env.write_text("EXA_API_KEY=exa-from-hermes\n")
 
-            with mock.patch.object(config, "__file__", str(fake_config)):
-                with mock.patch.object(env_loader, "get_hermes_env_path", return_value=hermes_env):
-                    with mock.patch.dict(os.environ, {}, clear=True):
-                        config._load_env_file()
-                        self.assertEqual(os.environ.get("EXA_API_KEY"), "exa-from-hermes")
+            with mock.patch.object(env_loader, "get_hermes_env_path", return_value=hermes_env):
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    env_loader.load_env_files(fake_config)
+                    self.assertEqual(os.environ.get("EXA_API_KEY"), "exa-from-hermes")
 
     def test_hermes_profile_env_does_not_override_existing_env(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -81,11 +82,10 @@ class EnvLoadingTests(unittest.TestCase):
             hermes_env.parent.mkdir()
             hermes_env.write_text("TAVILY_API_KEY=tvly-from-hermes\n")
 
-            with mock.patch.object(search, "__file__", str(fake_script)):
-                with mock.patch.object(env_loader, "get_hermes_env_path", return_value=hermes_env):
-                    with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "already-set"}, clear=True):
-                        search._load_env_file()
-                        self.assertEqual(os.environ.get("TAVILY_API_KEY"), "already-set")
+            with mock.patch.object(env_loader, "get_hermes_env_path", return_value=hermes_env):
+                with mock.patch.dict(os.environ, {"TAVILY_API_KEY": "already-set"}, clear=True):
+                    env_loader.load_env_files(fake_script)
+                    self.assertEqual(os.environ.get("TAVILY_API_KEY"), "already-set")
 
     def test_config_api_key_treats_template_placeholder_as_missing(self):
         with mock.patch.dict(os.environ, {"SERPER_API_KEY": "***"}, clear=True):

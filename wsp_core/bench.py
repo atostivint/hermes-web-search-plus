@@ -15,7 +15,7 @@ Two deliberate properties:
   ``record_provider_outcome`` (provider_stats latency memory).
 
 The bench never writes configuration. Applying the recommended priority is an
-explicit operator step (``setup.py config set-priority ...``).
+explicit operator step (``hermes web-search-plus config set-priority ...``).
 """
 
 from __future__ import annotations
@@ -326,9 +326,9 @@ def _bench_one_provider(
 
 def _build_recommendation(ranked: List[str], current_priority: List[str]) -> Dict[str, Any]:
     if ranked:
-        apply_hint = "python setup.py config set-priority " + ",".join(ranked)
+        apply_hint = "hermes web-search-plus config set-priority " + ",".join(ranked)
     else:
-        apply_hint = "configure at least one search provider first: python setup.py setup"
+        apply_hint = "configure at least one search provider first: hermes web-search-plus setup"
     return {
         "config_key": RECOMMENDATION_CONFIG_KEY,
         "provider_priority": list(ranked),

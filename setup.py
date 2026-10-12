@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Standalone onboarding and Provider SDK scaffolding for web-search-plus.
+"""Standalone helpers for web-search-plus, run outside Hermes.
 
-Normal users can run ``setup.py status``/``list``/``setup``.  SDK users can
-start a self-contained provider with ``setup.py new-provider <id>``.
+Provider keys belong to Hermes, so ``status``, ``setup`` and ``bench`` run as
+``hermes web-search-plus <command>``, where Hermes has loaded your profile.
+This script still serves what needs no secrets: ``list``, ``fastpath``,
+``config ...`` (routing preferences in config.json) and, for SDK users,
+``new-provider <id>`` to start a self-contained provider.
 """
 from __future__ import annotations
 
@@ -107,6 +110,23 @@ def _load_plugin():
     return plugin
 
 
+# Commands that need the keys of a Hermes profile. Outside Hermes they only point to the hermes CLI.
+_HERMES_ONLY_COMMANDS = ("status", "setup", "bench")
+
+
+def _redirect_to_hermes(command: str) -> int:
+    print(
+        f"`setup.py {command}` needs your Hermes profile's keys, so it now runs inside Hermes:\n"
+        f"    hermes web-search-plus {command}\n"
+        "This script no longer reads or writes .env files. Store keys with "
+        "`hermes config set BRAVE_API_KEY <key>` or in Hermes Desktop "
+        "(Settings > Plugins > Web Search Plus).\n"
+        "Still available here: list, fastpath, config ..., new-provider <id>.",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "new-provider":
         _new_provider(sys.argv[2:])
@@ -114,10 +134,14 @@ def main() -> None:
     plugin = _load_plugin()
     parser = argparse.ArgumentParser(
         prog="web-search-plus setup.py",
-        description="Configure and inspect web-search-plus provider API keys without Hermes core patches.",
+        description="Routing config and Provider SDK scaffolding for web-search-plus outside Hermes. "
+        "Status and key setup run as `hermes web-search-plus status|setup`.",
     )
     plugin._web_search_plus_cli_setup(parser)
     args = parser.parse_args()
+    command = getattr(args, "web_search_plus_command", None) or "status"
+    if command in _HERMES_ONLY_COMMANDS:
+        sys.exit(_redirect_to_hermes(command))
     args.func(args)
 
 

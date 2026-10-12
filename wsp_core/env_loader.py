@@ -1,6 +1,11 @@
 """Shared environment loading helpers for Web Search Plus.
 
-The plugin supports three credential locations, in precedence order:
+The engine and the Hermes plugin never call :func:`load_env_files`: under
+Hermes, credentials come from the active profile through
+``wsp_core.credentials.get_secret``. Hosts that vendor ``wsp_core`` (the MCP
+server, the OpenClaw skill) may call it from their own entrypoints.
+
+:func:`load_env_files` reads three locations, in precedence order:
 1. plugin-local ``.env`` for standalone/plugin development
 2. legacy parent ``.env`` used by earlier installs
 3. Hermes profile ``.env`` (``$HERMES_HOME/.env`` or hermes_constants)

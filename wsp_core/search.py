@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Web Search Plus — Unified Multi-Provider Search and Extraction with Intelligent Auto-Routing
-Version: 5.0.1
+Version: 5.1.0
 Supports search providers: You.com, Serper, Exa, Firecrawl, Tavily, Linkup,
 Brave Search, SerpBase, Querit, Parallel, SearXNG, Keenable.
 Supports extract providers: Firecrawl, Linkup, Parallel, Tavily, Exa, You.com, Keenable, Serper.
@@ -96,7 +96,7 @@ from .search_locale import (
     provider_supports_locale,
     resolve_locale,
 )
-from .env_loader import load_env_files
+from .credentials import is_secret_scope_error
 from .research import run_research_mode
 from .attempt_engine_v3 import AttemptEngine, provider_attempt_context, request_deadline
 from .cache_v3 import ResponseCacheV3
@@ -120,11 +120,6 @@ from .routing import (
     explain_routing,
 )
 from .extract import extract_plus
-
-
-def _load_env_file():
-    """Load plugin-local, legacy parent, and Hermes profile .env files."""
-    load_env_files(__file__)
 
 
 EXTRACT_PROVIDER_PRIORITY = _extract.EXTRACT_PROVIDER_PRIORITY
@@ -1709,11 +1704,15 @@ def _execute_research_v3(
         attempted = engine.execute(contexts[provider], operation)
         receipts_by_provider[provider] = attempted.receipt
         if attempted.payload is None:
-            message = (
-                attempted.receipt.error.message
-                if attempted.receipt.error is not None
-                else "Provider attempt did not return a payload."
-            )
+            receipt = attempted.receipt
+            if receipt.error is not None:
+                message = receipt.error.message
+            elif receipt.skip_reason is not None:
+                # Same wording as normal search, e.g. a provider still blocked
+                # after "Out of credits" at its last call.
+                message = _SKIP_REASON_TEXT.get(receipt.skip_reason, receipt.skip_reason.value)
+            else:
+                message = "Provider attempt did not return a payload."
             raise ProviderRequestError(message)
         payloads_by_provider[provider] = attempted.payload
         return attempted.payload
@@ -2101,7 +2100,9 @@ def _race_providers(engine, candidates, contexts, operation_for, hedge_delay, de
             continue
         try:
             execution = tasks[provider][0].result(timeout=0)
-        except Exception:  # pragma: no cover - engine.execute converts provider errors
+        except Exception as exc:  # pragma: no cover - engine.execute converts provider errors
+            if is_secret_scope_error(exc):
+                raise
             execution = None
         finished[provider] = execution
         payload = execution.payload if execution is not None else None

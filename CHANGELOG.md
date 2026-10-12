@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [v5.1.0] — 2026-10-12
+
+### Breaking changes
+
+- **Provider keys come through Hermes only** (Hermes plugin catalog rule 11). Under Hermes, Web Search Plus reads provider keys and per-profile settings (`*_API_KEY`, `SEARXNG_INSTANCE_URL`, `SEARXNG_ALLOW_PRIVATE`, `KEENABLE_ALLOW_PUBLIC`, `DONSETCH_BIN`, `TYPESAFE_API_KEY`) with Hermes' profile-scoped `get_secret` and no longer loads `.env` files itself. Keys kept only in the plugin directory's `.env` or `~/.hermes/plugins/.env` are no longer seen: store them in your profile with `hermes config set NAME <key>` or in Hermes Desktop (Settings > Plugins > Web Search Plus). A new or changed key applies from the next message on the gateway; in the interactive CLI run `/reload` first. To switch a provider off, set its key to an empty value: a removed line (`hermes config unset`) of a key Hermes does not know by name stays active until Hermes restarts.
+- **Setup runs inside Hermes.** `hermes web-search-plus status|setup` show which keys the active profile sees. Setup no longer asks for keys or writes `.env` files; it prints `hermes config set <NAME> <key>` for each missing provider and still writes routing preferences, keyless opt-ins and the Jev switch to `plugins/config.json`. `python3 setup.py status|setup|bench` now exit with a pointer to the Hermes command; `setup.py list|fastpath|config …|new-provider` are unchanged.
+- **Jev reads `TYPESAFE_API_KEY` only.** `TYPESAFE_API_KEY_FILE`, `--jev-key-file` and `jev.api_key_file` are ignored (old configs still load).
+- The standalone `python search.py` no longer reads `.env` files; export the variables first (for example `set -a; . ~/.hermes/.env; set +a`).
+
+### Changed
+
+- On a multiplexing Hermes gateway each profile sees only its own keys, including in fallback and research worker threads. A read without a profile scope is reported as Hermes' own error instead of "no provider configured".
+- Hermes Desktop settings gain a TypeSafe key field and a DonSeTch binary path field.
+- Hermes builds without `agent.secret_scope` fall back to the process environment.
+
+### Fixed
+
+- Key hints in `status`, `setup` and provider errors say when a new key applies (next gateway message, `/reload` in the CLI) instead of `/reset`, which does not reload keys.
+- Research mode names why a provider was skipped, for example "Out of credits or quota at its last call", instead of "Provider attempt did not return a payload".
+- Brave queries are shortened only past Brave's documented limit of 600 characters and 75 words. 5.0.1 used 400 characters and 50 words and cut queries Brave would have accepted.
+
 ## [v5.0.1] — 2026-10-10
 
 ### Fixed
