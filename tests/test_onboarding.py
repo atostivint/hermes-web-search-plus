@@ -364,6 +364,7 @@ def test_setup_never_writes_an_env_file_or_credential_file(tmp_path, monkeypatch
     monkeypatch.setenv("HOME", str(tmp_path))
     config_path = tmp_path / "plugins-config.json"
     _isolate_keyless_env(monkeypatch, config_path)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)  # a real key in the shell hides the hint
     parser = wsp.argparse.ArgumentParser()
     wsp._web_search_plus_cli_setup(parser)
     args = parser.parse_args([

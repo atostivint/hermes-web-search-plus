@@ -364,7 +364,7 @@ def urlopen(req, timeout: float = 30):
     return _pooled_open(req, timeout)
 
 
-DEFAULT_USER_AGENT = "ClawdBot-WebSearchPlus/5.0.1"
+DEFAULT_USER_AGENT = "ClawdBot-WebSearchPlus/5.1.0"
 
 
 class ProviderRequestError(Exception):

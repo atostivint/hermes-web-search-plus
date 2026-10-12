@@ -37,9 +37,9 @@ process environment. Do not put API keys in the WSP repository:
 export DONSETCH_BIN="$(command -v donsetch)"
 ```
 
-For a persistent Hermes setup, add the resulting absolute path to
-`~/.hermes/.env` and restart the Hermes process that loads provider
-configuration. `DONSETCH_BIN` is a path, not a network URL or API credential.
+For a persistent Hermes setup, store the absolute path in your profile with
+`hermes config set DONSETCH_BIN /absolute/path/to/donsetch` or the DonSeTch
+binary field in Hermes Desktop (Settings > Plugins > Web Search Plus). `DONSETCH_BIN` is a path, not a network URL or API credential.
 
 ## Use DonSeTch explicitly
 

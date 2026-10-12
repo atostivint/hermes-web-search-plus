@@ -19,7 +19,13 @@ It adds two Hermes tools:
 
 > Ported from [web-search-plus-plugin](https://github.com/robbyczgw-cla/web-search-plus-plugin) for the [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin API.
 
-Current release: **v5.0.1**. Version history: [Changelog](CHANGELOG.md).
+Current release: **v5.1.0**. Version history: [Changelog](CHANGELOG.md).
+
+### What's new in 5.1
+
+- **Keys come through Hermes.** Web Search Plus reads provider keys from your active Hermes profile and no longer reads `.env` files itself. Store keys with `hermes config set BRAVE_API_KEY <key>` or in Hermes Desktop (Settings > Plugins > Web Search Plus). Keys kept only in the plugin folder's `.env` or `~/.hermes/plugins/.env` must move: see [Breaking changes in 5.1](CHANGELOG.md#breaking-changes).
+- **Setup runs inside Hermes.** `hermes web-search-plus status` and `hermes web-search-plus setup` show which keys the active profile sees and print the `hermes config set` command for each missing one.
+- **Research mode says why a provider was skipped**, for example "Out of credits", instead of "did not return a payload".
 
 ### What's new in 5.0
 
@@ -27,9 +33,9 @@ Current release: **v5.0.1**. Version history: [Changelog](CHANGELOG.md).
 - **Better results.** Two blind judges compared 4.3.5 and 5.0 answer by answer and preferred 5.0 in about two thirds of the queries, in all eight query types.
 - **Shorter answers.** Results are about 35 % shorter for the agent; the source a query asks for is found as often as before.
 - **Searches in the query's language.** A clearly German or French query is searched in German or French, unless you set a language yourself.
-- **Simpler setup.** `setup.py setup` asks for the four providers automatic routing uses most: Brave, Serper, Exa and Linkup. Without a key, it asks (in a terminal, default no) whether to start on Keenable's free public tier so search works right away.
+- **Simpler setup.** Setup starts with the four providers automatic routing uses most: Brave, Serper, Exa and Linkup. Without a key, it asks (in a terminal, default no) whether to start on Keenable's free public tier so search works right away.
 
-5.0 changes how automatic routing chooses providers: with a Brave key, most searches now go to Brave. Code that imports engine modules directly has to change its imports. Prefer your own order? `setup.py config set-order exa,serper,brave` uses it for every query. Details: [Breaking changes in 5.0](CHANGELOG.md#breaking-changes).
+5.0 changes how automatic routing chooses providers: with a Brave key, most searches now go to Brave. Code that imports engine modules directly has to change its imports. Prefer your own order? `hermes web-search-plus config set-order exa,serper,brave` uses it for every query. Details: [Breaking changes in 5.0](CHANGELOG.md#breaking-changes-1).
 
 ---
 
@@ -50,26 +56,28 @@ Current release: **v5.0.1**. Version history: [Changelog](CHANGELOG.md).
 # 1) Install and enable the plugin
 hermes plugins install robbyczgw-cla/hermes-web-search-plus --enable
 
-# 2) Add provider keys (asks for Brave, Serper, Exa and Linkup; Enter skips one)
-python3 ~/.hermes/plugins/web-search-plus/setup.py setup
-python3 ~/.hermes/plugins/web-search-plus/setup.py status
+# 2) See which keys are missing; setup prints the command for each one
+hermes web-search-plus setup
 
-# 3) Reload Hermes so the tools are registered
-# CLI: exit and start `hermes` again, or use /reset in-session
-# Gateway: /restart, then /reset
+# 3) Store at least one key in your Hermes profile (or use Hermes Desktop:
+#    Settings > Plugins > Web Search Plus, which keeps it out of shell history)
+hermes config set BRAVE_API_KEY <key>
+hermes web-search-plus status
 
-# 4) Optional shell smoke test
-cd ~/.hermes/plugins/web-search-plus
-python3 search.py --query "Hermes Agent latest release" --provider auto --quality-report
+# 4) Restart Hermes once so the new tools are registered
+# CLI: exit and start `hermes` again
+# Gateway: /restart
 ```
 
-Web Search Plus supports 15 search and 9 extraction providers; you do **not** need them all. One search key enables `web_search_plus`, one extraction key enables `web_extract_plus`. Automatic routing tries Brave first for most queries, Exa for docs and academic queries, and Serper for security and shopping; `setup.py status` shows which query types fall back because a key is missing. `setup.py setup --preset all` walks through every provider. The setup helper stores keys in the active Hermes environment file — never commit them to the repository.
+A new or changed key applies from your next message on the gateway (Telegram, Discord, API); in the interactive CLI run `/reload` first. To switch a provider off, set its key to an empty value (`hermes config set BRAVE_API_KEY ""`): `hermes config unset` removes the line, but a key Hermes does not know by name stays active until Hermes restarts.
+
+Web Search Plus supports 15 search and 9 extraction providers; you do **not** need them all. One search key enables `web_search_plus`, one extraction key enables `web_extract_plus`. Automatic routing tries Brave first for most queries, Exa for docs and academic queries, and Serper for security and shopping; `hermes web-search-plus status` shows which query types fall back because a key is missing. `hermes web-search-plus setup --preset all` lists every provider. Hermes stores the keys in the active profile; never commit them to a repository.
 
 Optional Jev stays off unless you pass `--jev`:
 
 ```bash
-python3 ~/.hermes/plugins/web-search-plus/setup.py setup --preset lean \
-  --jev --jev-key-file "$HOME/.hermes/secrets/typesafe_api_key"
+hermes config set TYPESAFE_API_KEY <key>
+hermes web-search-plus setup --preset lean --jev
 ```
 
 Provider privacy is not uniform. Before sending sensitive queries or URLs, review the maintained [Provider Privacy & Terms guide](https://websearchplus.xyz/providers.html#privacy-terms), which distinguishes standard self-serve terms from enterprise-only ZDR or no-training options.
@@ -79,11 +87,11 @@ Provider privacy is not uniform. Before sending sensitive queries or URLs, revie
 For a privacy- and budget-oriented setup with no commercial API key, use the self-hosted wizard preset:
 
 ```bash
-python3 ~/.hermes/plugins/web-search-plus/setup.py setup --preset self-hosted
-python3 ~/.hermes/plugins/web-search-plus/setup.py status
+hermes web-search-plus setup --preset self-hosted
+hermes web-search-plus status
 ```
 
-It selects the derived `self_hosted` profile: automatic search uses only your SearXNG instance and keyless Keenable, while automatic extraction runs through Keenable's public fetch tier (SearXNG does not extract; the public tier is rate-limited and has no SLA). Configure SearXNG with `searxng.base_url` (the older `instance_url` still works); an instance on localhost or your LAN also needs `SEARXNG_ALLOW_PRIVATE=1` in `.env`; the preset enables Keenable's existing public tier without writing a key. See the [Self-hosted profile guide](docs/USER_GUIDE.md#self-hosted-automatic-routing-profile) for prerequisites and explicit-provider behavior.
+It selects the derived `self_hosted` profile: automatic search uses only your SearXNG instance and keyless Keenable, while automatic extraction runs through Keenable's public fetch tier (SearXNG does not extract; the public tier is rate-limited and has no SLA). Configure SearXNG with `searxng.base_url` (the older `instance_url` still works); an instance on localhost or your LAN also needs `hermes config set SEARXNG_ALLOW_PRIVATE 1`; the preset enables Keenable's existing public tier without writing a key. See the [Self-hosted profile guide](docs/USER_GUIDE.md#self-hosted-automatic-routing-profile) for prerequisites and explicit-provider behavior.
 
 ### Optional Octen source search via Monid
 
@@ -151,7 +159,7 @@ Full parameters, freshness and locale behavior, provider selection, extraction c
 
 - **Installing or configuring providers** → [User Guide](docs/USER_GUIDE.md) · [DonSeTch local provider](docs/DONSETCH.md)
 - **Comparing provider privacy and terms** → [Provider Privacy & Terms](https://websearchplus.xyz/providers.html#privacy-terms)
-- **Upgrading** → [Breaking changes in 5.0](CHANGELOG.md#breaking-changes) · [DonSeTch migration from 4.0](docs/DONSETCH.md#migration-from-hound)
+- **Upgrading** → [Breaking changes in 5.1](CHANGELOG.md#breaking-changes) · [Breaking changes in 5.0](CHANGELOG.md#breaking-changes-1) · [DonSeTch migration from 4.0](docs/DONSETCH.md#migration-from-hound)
 - **What changed** → [Changelog](CHANGELOG.md)
 - **Troubleshooting** → [FAQ](docs/FAQ.md) · [Operator Console](docs/V3_OPERATOR_CONSOLE.md)
 - **Contributing or building a provider** → [Contributing](CONTRIBUTING.md) · [Provider SDK](docs/PROVIDER_SDK.md) · [Architecture](docs/ARCHITECTURE.md)

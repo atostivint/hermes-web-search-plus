@@ -31,7 +31,7 @@ The plugin does not run a separate hosted backend. It does not add an analytics 
 - `setup.py`: thin standalone CLI entrypoint that loads the plugin package and its setup helpers.
 - `tests/`: unit and regression coverage for providers, onboarding, routing, extraction, and docs-sensitive configuration.
 
-Default file locations are relative to the plugin directory and did not change when the engine moved into `wsp_core/`: cache and runtime state in `../.cache`, behaviour config in `../config.json`, keys in the plugin `.env`, the parent `.env` and the Hermes profile `.env`.
+Default file locations are relative to the plugin directory and did not change when the engine moved into `wsp_core/`: cache and runtime state in `../.cache`, behaviour config in `../config.json`. Keys are not files of the plugin: since 5.1 the engine reads them through `wsp_core.credentials.get_secret`, which the Hermes plugin points at Hermes' profile-scoped `get_secret`.
 
 ## Tool surface
 
@@ -55,7 +55,7 @@ Provider pricing, freshness, ranking, localization, and vertical support are con
 
 There are two config layers:
 
-- Secrets: provider keys in `.env`.
+- Secrets: provider keys in the Hermes profile, read through Hermes' `get_secret`.
 - Behavior: routing config in `config.json`.
 
 Default routing config includes:
@@ -206,8 +206,8 @@ Useful fields include:
 Setup/status diagnostics:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py status --json
-python ~/.hermes/plugins/web-search-plus/setup.py config show --json
+hermes web-search-plus status --json
+hermes web-search-plus config show --json
 ```
 
 ## Data flow and trust boundary

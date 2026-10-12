@@ -1,11 +1,11 @@
 """
-web-search-plus — Hermes Plugin v5.0.1
+web-search-plus — Hermes Plugin v5.1.0
 Multi-provider web search, URL extraction, quality reports, and opt-in research mode.
 Ported from robbyczgw-cla/web-search-plus-plugin (OpenClaw) to Hermes Plugin API.
 """
 from __future__ import annotations
 
-__version__ = "5.0.1"
+__version__ = "5.1.0"
 
 import argparse
 import importlib
@@ -993,7 +993,7 @@ def _render_status_dashboard(status: Optional[Dict[str, Any]] = None, *, color: 
     ])
     if status["search_configured"]:
         lines.extend([
-            "   After adding keys, run /reload in Hermes so the running agent reads them.",
+            "   New keys apply from your next message to Hermes; in the interactive CLI run /reload first.",
             "   python3 ~/.hermes/plugins/web-search-plus/search.py --query \"Hermes Agent latest release\" --quality-report",
         ])
     return "\n".join(lines)
@@ -1074,7 +1074,7 @@ def _print_key_instructions(commands: List[str]) -> None:
     print(
         "  Or use Hermes Desktop: Settings > Plugins > Web Search Plus (masked key fields).\n"
         "  The command form puts the key on the command line, so your shell history keeps it; "
-        "Desktop avoids that. Then run /reload in Hermes so the running agent reads the key."
+        "Desktop avoids that. Hermes reads the key from your next message; in the interactive CLI run /reload first."
     )
 
 
@@ -1577,7 +1577,7 @@ def _web_search_plus_cli_command(args: Any) -> None:
         if not wrote_any:
             print("Nothing changed in the routing config.")
             return
-        print("Next: restart Hermes or run /reset so tools re-register with the new preferences.")
+        print("Next: restart Hermes so the tools re-register with the new preferences.")
         return
 
     raise SystemExit(f"Unknown web-search-plus command: {command}")

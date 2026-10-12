@@ -102,7 +102,7 @@ def missing_key_guidance(provider: str) -> dict:
             f"1. Get your API key from {spec.signup_url}",
             f"2. Run: hermes web-search-plus setup {provider}",
             f"3. Store it through Hermes: hermes config set {env_var} <key> (or Hermes Desktop > Settings > Plugins > Web Search Plus)",
-            "4. Then run /reload in Hermes so the running agent reads the new key",
+            "4. Send your next message: Hermes reads the key then (in the interactive CLI run /reload first)",
         ],
         "provider": provider,
     }

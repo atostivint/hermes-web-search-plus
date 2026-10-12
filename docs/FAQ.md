@@ -33,8 +33,8 @@ For the exact flow, see [Routing](ROUTING.md) and [Architecture](ARCHITECTURE.md
 Measure instead of guessing: run the built-in provider bench, which races your configured providers against a small fixed query suite and recommends an `auto_routing.provider_priority` order ranked by success rate, median latency, and simple quality signals:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py bench
-# or, from the plugin directory:
+hermes web-search-plus bench
+# or, from the plugin directory with the keys exported:
 python3 search.py --bench
 ```
 
@@ -82,24 +82,14 @@ Typical causes:
 
 ## Why is my new key not detected?
 
-After editing `.env`, restart or reset Hermes so the process reloads environment variables:
-
-```text
-CLI: restart hermes, or use /reset
-Gateway/Telegram: /restart, then /reset
-```
-
-Then check:
+Since 5.1, Web Search Plus reads keys only from your active Hermes profile. A key kept only in the plugin folder's `.env` or in `~/.hermes/plugins/.env` is not seen; store it in the profile:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py status
+hermes config set YOU_API_KEY <key>
+hermes web-search-plus status
 ```
 
-Also verify that the key was written to the environment file Hermes actually uses. The setup helper supports explicit targeting:
-
-```bash
-python ~/.hermes/plugins/web-search-plus/setup.py setup you --env-path ~/.hermes/.env
-```
+A new or changed key applies from your next message on the gateway (Telegram, Discord, API); in the interactive CLI run `/reload` first. To switch a provider off, set its key to an empty value (`hermes config set BRAVE_API_KEY ""`): `hermes config unset` removes the line, but a key Hermes does not know by name stays active until Hermes restarts. With several Hermes profiles, store the key in the profile that runs the agent.
 
 ## How do I cap spend?
 
@@ -125,8 +115,8 @@ Different SERP APIs can have different freshness, ranking, localization, persona
 Yes. Configure one search-capable provider and pin it if you want predictable behavior:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py setup you
-python ~/.hermes/plugins/web-search-plus/setup.py config set-default you
+hermes config set YOU_API_KEY <key>
+hermes web-search-plus config set-default you
 ```
 
 Extraction requires an extraction-capable provider such as Linkup, Firecrawl, Tavily, Exa, Parallel, You.com, or the separately installed local DonSeTch sidecar.

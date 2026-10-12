@@ -22,29 +22,28 @@ hermes plugins install robbyczgw-cla/hermes-web-search-plus --enable
 Check status and configure keys:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py status
-python ~/.hermes/plugins/web-search-plus/setup.py setup
+hermes web-search-plus status
+hermes web-search-plus setup
+hermes config set BRAVE_API_KEY <key>
 ```
 
-Restart or reset Hermes after changing keys so the tool schemas and environment are reloaded:
+Hermes Desktop has the same key fields under Settings > Plugins > Web Search Plus and keeps keys out of your shell history.
 
-```text
-CLI: exit and start hermes again, or use /reset in-session
-Gateway/Telegram: /restart, then /reset
-```
+After the first install, restart Hermes once so the tools are registered (CLI: exit and start `hermes` again; gateway: `/restart`). A new or changed key applies from your next message on the gateway (Telegram, Discord, API); in the interactive CLI run `/reload` first. To switch a provider off, set its key to an empty value (`hermes config set BRAVE_API_KEY ""`): `hermes config unset` removes the line, but a key Hermes does not know by name stays active until Hermes restarts.
 
-Smoke test from the plugin directory:
+Smoke test from the plugin directory. The standalone script does not read `.env` files, so export the keys first:
 
 ```bash
 cd ~/.hermes/plugins/web-search-plus
+set -a; . ~/.hermes/.env; set +a
 python3 search.py --query "Hermes Agent latest release" --provider auto --quality-report --compact
 ```
 
 Inspect whether the install is likely to hit the low-latency Hermes fast path:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py fastpath
-python ~/.hermes/plugins/web-search-plus/setup.py fastpath --json
+hermes web-search-plus fastpath
+hermes web-search-plus fastpath --json
 ```
 
 The fast-path checker is intentionally advisory and stdlib-only. It verifies that the plugin declares both tools for direct registration, that the standalone setup helper is available, and whether your Hermes `config.yaml` contains the current public-Hermes hint below. It does not require Hermes core patches.
@@ -61,8 +60,8 @@ Use this when Web Search Plus should be the preferred web layer. Without it, Web
 Once keys are configured, benchmark the providers against each other and get a data-backed `auto_routing.provider_priority` suggestion:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py bench
-# or, from the plugin directory:
+hermes web-search-plus bench
+# or, from the plugin directory with the keys exported:
 python3 search.py --bench
 python3 search.py --bench --json   # structured report
 ```
@@ -78,31 +77,31 @@ Note that the bench makes a few real API calls per provider, so it spends a smal
 
 ## Provider setup
 
-Keys live in the active Hermes environment file, normally `~/.hermes/.env`. The setup helper preserves existing entries and does not print secret values. See the generated [provider reference](PROVIDERS.md) for every provider's capabilities, env var, auto-routing default, free tier, and signup link.
+Keys live in the active Hermes profile. Store them with `hermes config set <NAME> <key>` or in Hermes Desktop; Web Search Plus reads them through Hermes and never prints secret values. See the generated [provider reference](PROVIDERS.md) for every provider's capabilities, env var, auto-routing default, free tier, and signup link.
 
 Useful commands:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py list
-python ~/.hermes/plugins/web-search-plus/setup.py status --json
-python ~/.hermes/plugins/web-search-plus/setup.py setup --preset starter
-python ~/.hermes/plugins/web-search-plus/setup.py setup you linkup --env-path ~/.hermes/.env
+hermes web-search-plus list
+hermes web-search-plus status --json
+hermes web-search-plus setup --preset starter
+hermes web-search-plus setup you linkup
 ```
 
 Presets:
 
-- `starter`: Brave + Serper + Exa + Linkup. The providers automatic routing uses first; this is what `setup.py setup` asks for by default.
+- `starter`: Brave + Serper + Exa + Linkup. The providers automatic routing uses first; this is what `hermes web-search-plus setup` starts with by default.
 - `lean`: Brave + Linkup. Small fast search plus extraction.
 - `search`: Brave + Serper + Exa + Tavily + Firecrawl + Linkup. The full default search pool.
 - `extract`: Linkup + Firecrawl + Tavily. Extraction-heavy setup.
 - `self-hosted`: SearXNG + keyless Keenable for automatic routing without a commercial API key. A separately installed DonSeTch sidecar can be layered on for explicit local search and extraction.
-- `all`: prompt for every supported provider.
+- `all`: every supported provider.
 
 Search-capable providers include You.com, Serper, Exa, Firecrawl, Tavily, Linkup, Parallel, Brave, SearXNG, SerpBase, Querit, Keenable, and the optional local DonSeTch MCP sidecar. Extraction-capable providers are Linkup, Firecrawl, Tavily, Exa, Parallel, You.com, Keenable, Serper, and DonSeTch.
 
-Keenable is keyless: set `KEENABLE_API_KEY` for the authenticated endpoints, or opt into its public tier (off by default). In the wizard, skip the Keenable key prompt and answer yes, or run `setup.py setup keenable --keyless-public`; it writes `keenable.allow_public: true` to `config.json` (equivalently `KEENABLE_ALLOW_PUBLIC=1`).
+Keenable is keyless: set `KEENABLE_API_KEY` for the authenticated endpoints, or opt into its public tier (off by default). Without any search key, setup asks whether to start on it (default no); or run `hermes web-search-plus setup keenable --keyless-public`; it writes `keenable.allow_public: true` to `config.json` (equivalently `KEENABLE_ALLOW_PUBLIC=1`).
 
-DonSeTch is a different kind of keyless provider: it is a separately installed local MCP service rather than a public WSP endpoint. Set `DONSETCH_BIN=/absolute/path/to/donsetch` in the Hermes runtime environment, then call `provider="donsetch"` explicitly. DonSeTch stays outside automatic routing and fallback unless `setup.py config set-auto-allow donsetch on` is set. See [DonSeTch local MCP provider](DONSETCH.md) before enabling it; keyless removes commercial credentials and request billing, not local resource use, outbound traffic, rate limits, or website policy obligations.
+DonSeTch is a different kind of keyless provider: it is a separately installed local MCP service rather than a public WSP endpoint. Set `hermes config set DONSETCH_BIN /absolute/path/to/donsetch` (or the DonSeTch binary field in Hermes Desktop), then call `provider="donsetch"` explicitly. DonSeTch stays outside automatic routing and fallback unless `hermes web-search-plus config set-auto-allow donsetch on` is set. See [DonSeTch local MCP provider](DONSETCH.md) before enabling it; keyless removes commercial credentials and request billing, not local resource use, outbound traffic, rate limits, or website policy obligations.
 
 With a `KEENABLE_API_KEY` set, requests always use the authenticated endpoints. Without a key and without the opt-in, Keenable is treated as unconfigured: it won't auto-route, fall back, or enable `web_extract_plus`. When the public tier is enabled, queries and fetched URLs are sent to an **unauthenticated** public service with per-IP limits and no SLA — roughly 1,000 requests/hour and 10 requests/second — so treat it as a best-effort last resort, not a dependable provider. The first request that uses the public endpoint logs a one-time warning so the egress is visible, and `web-search-plus doctor` reports keyless providers as `key=no` with a separate `keyless=on/off` badge so key status stays truthful.
 
@@ -121,11 +120,11 @@ Neither SearXNG nor DonSeTch makes web access offline: searches still reach upst
 Use the `self_hosted` profile when automatic traffic must avoid commercial API keys. The quickest setup is:
 
 ```bash
-python ~/.hermes/plugins/web-search-plus/setup.py setup --preset self-hosted
-python ~/.hermes/plugins/web-search-plus/setup.py status
+hermes web-search-plus setup --preset self-hosted
+hermes web-search-plus status
 ```
 
-The preset records the profile, enables Keenable's existing keyless public tier, and prompts only for the optional SearXNG endpoint. To configure it directly, use the canonical `searxng.base_url` name (legacy `searxng.instance_url` remains supported):
+The preset records the profile and enables Keenable's existing keyless public tier. Set the optional SearXNG endpoint with `hermes config set SEARXNG_INSTANCE_URL <url>`. To configure it directly, use the canonical `searxng.base_url` name (legacy `searxng.instance_url` remains supported):
 
 ```json
 {
@@ -143,7 +142,7 @@ At load time, rather than by saving duplicate routing settings, the profile deri
 - Extraction auto pool: keyless-capable Keenable only.
 - Budget preflight limits continue to apply unchanged when configured.
 
-`setup.py status` is an offline diagnostic: it displays the active profile and effective auto pool, then checks that the SearXNG URL is present and well formed and that Keenable is configured or its keyless public tier is enabled. It never contacts either provider. If neither SearXNG nor Keenable is usable, an automatic request returns the typed `self_hosted_profile_unavailable` error with the local remediation.
+`hermes web-search-plus status` is an offline diagnostic: it displays the active profile and effective auto pool, then checks that the SearXNG URL is present and well formed and that Keenable is configured or its keyless public tier is enabled. It never contacts either provider. If neither SearXNG nor Keenable is usable, an automatic request returns the typed `self_hosted_profile_unavailable` error with the local remediation.
 
 #### Add DonSeTch for local Search + Extract
 
@@ -180,7 +179,7 @@ For a generated reference of each intent, its first provider and the fallback ch
 
 Secrets and behavior are intentionally separate:
 
-- Provider keys live in `.env`.
+- Provider keys live in the Hermes profile (`hermes config set`, Hermes Desktop).
 - Routing behavior lives in `config.json`.
 - `WEB_SEARCH_PLUS_CONFIG=/path/to/config.json` can point runtime search at a custom config.
 - `setup.py --config-path /path/to/config.json` points the setup helper at a custom config.
@@ -516,7 +515,7 @@ The plugin cannot normalize or guarantee provider pricing. Provider APIs own the
 
 ## Updating
 
-Update the plugin with Hermes’ plugin workflow or by pulling the installed clone, then restart/reset Hermes:
+Update the plugin with Hermes’ plugin workflow or by pulling the installed clone, then restart Hermes:
 
 ```bash
 cd ~/.hermes/plugins/web-search-plus
