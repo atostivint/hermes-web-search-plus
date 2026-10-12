@@ -199,7 +199,8 @@ PROVIDER = register_provider(
             "extract-inline",
         ),
         auto_allowed_by_default=False,
-        recommended=True,
+        # recommended stays with the starter preset (brave, serper, exa, linkup).
+        recommended=False,
         supports_freshness=True,
         free_tier="No free tier; Kagi API credits required",
         signup_url="https://kagi.com/api",
